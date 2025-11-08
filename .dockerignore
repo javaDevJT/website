@@ -1,0 +1,52 @@
+# Node modules
+frontend/node_modules
+node_modules
+
+# Build outputs
+target
+frontend/dist
+frontend/.vite-temp
+frontend/build
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# IDE
+.idea
+.vscode
+*.iml
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Documentation (not needed in image)
+*.md
+!README.md
+
+# Test files
+**/*.test.*
+**/__tests__
+**/test
+
+# CI/CD
+.github
+.gitlab-ci.yml
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
