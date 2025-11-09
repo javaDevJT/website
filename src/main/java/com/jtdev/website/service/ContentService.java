@@ -89,6 +89,8 @@ public class ContentService {
         // First pass: Convert headers with dynamic borders
         html = convertDynamicHeaders(html);
         
+        html = formatNestedLists(html);
+
         // Convert HTML elements to ASCII formatting
         String text = html
             // Headers already converted above
@@ -100,8 +102,8 @@ public class ContentService {
             // Lists
             .replaceAll("<ul[^>]*>", "")
             .replaceAll("</ul>", "")
-            .replaceAll("<li[^>]*>", "  • ")
-            .replaceAll("</li>", "\n")
+            .replaceAll("<ol[^>]*>", "")
+            .replaceAll("</ol>", "")
 
             // Paragraphs
             .replaceAll("<p[^>]*>", "")
@@ -162,6 +164,90 @@ public class ContentService {
 
         // The formatting is already handled in the regex replacements above
         return text.trim();
+    }
+
+    private String formatNestedLists(String html) {
+        Pattern pattern = Pattern.compile("(?is)<(ul|ol)[^>]*>|</(ul|ol)>|<li[^>]*>|</li>");
+        Matcher matcher = pattern.matcher(html);
+        StringBuilder result = new StringBuilder();
+        Deque<ListContext> stack = new ArrayDeque<>();
+        int lastEnd = 0;
+
+        while (matcher.find()) {
+            result.append(html, lastEnd, matcher.start());
+            String tag = matcher.group();
+            String normalized = tag.toLowerCase(Locale.ROOT);
+
+            if (normalized.startsWith("<ul")) {
+                stack.push(ListContext.unordered());
+            } else if (normalized.startsWith("<ol")) {
+                stack.push(ListContext.ordered());
+            } else if (normalized.startsWith("</ul") || normalized.startsWith("</ol")) {
+                if (!stack.isEmpty()) {
+                    stack.pop();
+                }
+                ensureTrailingNewline(result);
+            } else if (normalized.startsWith("<li")) {
+                ensureTrailingNewline(result);
+                result.append(buildListPrefix(stack));
+            } else if (normalized.startsWith("</li")) {
+                ensureTrailingNewline(result);
+            }
+
+            lastEnd = matcher.end();
+        }
+
+        result.append(html.substring(lastEnd));
+        return result.toString();
+    }
+
+    private void ensureTrailingNewline(StringBuilder builder) {
+        int length = builder.length();
+        if (length == 0 || builder.charAt(length - 1) != '\n') {
+            builder.append('\n');
+        }
+    }
+
+    private String buildListPrefix(Deque<ListContext> stack) {
+        int depth = stack.isEmpty() ? 1 : stack.size();
+        int indentSpaces = depth * 2;
+        String indent = indentSpaces > 0 ? " ".repeat(indentSpaces) : "";
+        ListContext context = stack.peek();
+
+        if (context != null && context.isOrdered()) {
+            int index = context.nextIndex();
+            return indent + index + ". ";
+        }
+
+        String[] bullets = {"•", "◦", "▪", "▹", "▸"};
+        String bullet = bullets[Math.min(depth - 1, bullets.length - 1)];
+        return indent + bullet + " ";
+    }
+
+    private static class ListContext {
+        private final boolean ordered;
+        private int index;
+
+        private ListContext(boolean ordered) {
+            this.ordered = ordered;
+        }
+
+        static ListContext ordered() {
+            return new ListContext(true);
+        }
+
+        static ListContext unordered() {
+            return new ListContext(false);
+        }
+
+        boolean isOrdered() {
+            return ordered;
+        }
+
+        int nextIndex() {
+            index++;
+            return index;
+        }
     }
 
     private String convertDynamicHeaders(String html) {
