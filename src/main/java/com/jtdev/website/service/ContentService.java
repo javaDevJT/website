@@ -1,5 +1,7 @@
 package com.jtdev.website.service;
 
+import com.jtdev.website.model.BlogMetadata;
+import com.jtdev.website.model.PortfolioMetadata;
 import com.vladsch.flexmark.html.HtmlRenderer;
 import com.vladsch.flexmark.parser.Parser;
 import com.vladsch.flexmark.util.ast.Node;
@@ -8,25 +10,36 @@ import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.HtmlUtils;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
 
 import javax.imageio.ImageIO;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.*;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 @Service
 public class ContentService {
 
     private final ResourceLoader resourceLoader;
+    private String resumeTextCache;
+    private final Object resumeLock = new Object();
 
     public ContentService(ResourceLoader resourceLoader) {
         this.resourceLoader = resourceLoader;
@@ -236,5 +249,322 @@ public class ContentService {
         } catch (Exception e) {
             return "[Image]";
         }
+    }
+
+    /**
+     * Parse frontmatter from markdown content
+     * Frontmatter is YAML between --- markers at the start of the file
+     */
+    private Map<String, String> parseFrontmatter(String markdown) {
+        Map<String, String> frontmatter = new HashMap<>();
+        
+        if (!markdown.startsWith("---")) {
+            return frontmatter;
+        }
+        
+        int endIndex = markdown.indexOf("---", 3);
+        if (endIndex == -1) {
+            return frontmatter;
+        }
+        
+        String yaml = markdown.substring(3, endIndex).trim();
+        String[] lines = yaml.split("\n");
+        
+        for (String line : lines) {
+            int colonIndex = line.indexOf(":");
+            if (colonIndex > 0) {
+                String key = line.substring(0, colonIndex).trim();
+                String value = line.substring(colonIndex + 1).trim();
+                frontmatter.put(key, value);
+            }
+        }
+        
+        return frontmatter;
+    }
+
+    /**
+     * Extract excerpt from markdown (first paragraph or first 150 chars)
+     */
+    private String extractExcerpt(String markdown) {
+        // Remove frontmatter
+        String content = markdown;
+        if (content.startsWith("---")) {
+            int endIndex = content.indexOf("---", 3);
+            if (endIndex != -1) {
+                content = content.substring(endIndex + 3);
+            }
+        }
+        
+        // Remove markdown headers and formatting
+        content = content.replaceAll("^#+\\s+.*$", "")
+                        .replaceAll("\\*\\*([^*]+)\\*\\*", "$1")
+                        .replaceAll("\\*([^*]+)\\*", "$1")
+                        .replaceAll("`([^`]+)`", "$1")
+                        .trim();
+        
+        // Get first paragraph or 150 chars
+        int newlineIndex = content.indexOf("\n\n");
+        if (newlineIndex > 0 && newlineIndex < 200) {
+            content = content.substring(0, newlineIndex);
+        } else if (content.length() > 150) {
+            content = content.substring(0, 147) + "...";
+        }
+        
+        return content.trim();
+    }
+
+    /**
+     * Get list of blog posts with metadata
+     */
+    public List<BlogMetadata> getBlogList() throws IOException {
+        List<BlogMetadata> blogs = new ArrayList<>();
+        
+        Resource resource = resourceLoader.getResource("classpath:directories/blog");
+        if (!resource.exists()) {
+            return blogs;
+        }
+        
+        Path dirPath = Paths.get(resource.getURI());
+        try (Stream<Path> paths = Files.walk(dirPath, 1)) {
+            List<Path> mdFiles = paths
+                .filter(Files::isRegularFile)
+                .filter(p -> p.getFileName().toString().endsWith(".md"))
+                .collect(Collectors.toList());
+            
+            for (Path file : mdFiles) {
+                try {
+                    String filename = file.getFileName().toString();
+                    String markdown = Files.readString(file);
+                    Map<String, String> frontmatter = parseFrontmatter(markdown);
+                    
+                    String title = frontmatter.getOrDefault("title", 
+                        filename.replace(".md", "").replace("-", " "));
+                    
+                    LocalDate published = null;
+                    String publishedStr = frontmatter.get("published");
+                    if (publishedStr != null) {
+                        try {
+                            published = LocalDate.parse(publishedStr, 
+                                DateTimeFormatter.ofPattern("MMM yyyy", Locale.ENGLISH));
+                        } catch (DateTimeParseException e) {
+                            try {
+                                published = LocalDate.parse(publishedStr);
+                            } catch (DateTimeParseException ignored) {}
+                        }
+                    }
+                    
+                    List<String> tags = new ArrayList<>();
+                    String tagsStr = frontmatter.get("tags");
+                    if (tagsStr != null) {
+                        for (String tag : tagsStr.split(",|\\s+")) {
+                            tag = tag.trim().replace("#", "");
+                            if (!tag.isEmpty()) {
+                                tags.add(tag);
+                            }
+                        }
+                    }
+                    
+                    String excerpt = extractExcerpt(markdown);
+                    
+                    blogs.add(new BlogMetadata(filename, title, published, tags, excerpt));
+                } catch (Exception e) {
+                    System.err.println("Error parsing blog metadata for " + file + ": " + e.getMessage());
+                }
+            }
+        }
+        
+        // Sort by published date (newest first)
+        blogs.sort((a, b) -> {
+            if (a.getPublished() == null) return 1;
+            if (b.getPublished() == null) return -1;
+            return b.getPublished().compareTo(a.getPublished());
+        });
+        
+        return blogs;
+    }
+
+    /**
+     * Get list of portfolio projects with metadata
+     */
+    public List<PortfolioMetadata> getPortfolioList() throws IOException {
+        List<PortfolioMetadata> projects = new ArrayList<>();
+        
+        Resource resource = resourceLoader.getResource("classpath:directories/portfolio");
+        if (!resource.exists()) {
+            return projects;
+        }
+        
+        Path dirPath = Paths.get(resource.getURI());
+        try (Stream<Path> paths = Files.walk(dirPath, 1)) {
+            List<Path> mdFiles = paths
+                .filter(Files::isRegularFile)
+                .filter(p -> p.getFileName().toString().endsWith(".md"))
+                .collect(Collectors.toList());
+            
+            for (Path file : mdFiles) {
+                try {
+                    String filename = file.getFileName().toString();
+                    String markdown = Files.readString(file);
+                    Map<String, String> frontmatter = parseFrontmatter(markdown);
+                    
+                    String title = frontmatter.getOrDefault("title", 
+                        filename.replace(".md", "").replace("-", " "));
+                    
+                    List<String> technologies = new ArrayList<>();
+                    String techStr = frontmatter.get("technologies");
+                    if (techStr != null) {
+                        for (String tech : techStr.split(",")) {
+                            tech = tech.trim();
+                            if (!tech.isEmpty()) {
+                                technologies.add(tech);
+                            }
+                        }
+                    }
+                    
+                    String company = frontmatter.getOrDefault("company", "");
+                    String year = frontmatter.getOrDefault("year", "");
+                    String excerpt = extractExcerpt(markdown);
+                    
+                    projects.add(new PortfolioMetadata(filename, title, 
+                        technologies, company, year, excerpt));
+                } catch (Exception e) {
+                    System.err.println("Error parsing portfolio metadata for " + file + ": " + e.getMessage());
+                }
+            }
+        }
+        
+        return projects;
+    }
+
+    public String getResumeText() throws IOException {
+        if (resumeTextCache != null) {
+            return resumeTextCache;
+        }
+
+        synchronized (resumeLock) {
+            if (resumeTextCache == null) {
+                resumeTextCache = loadResumeTextFromPdf();
+            }
+        }
+
+        return resumeTextCache;
+    }
+
+    public Resource getResumePdfResource() {
+        Resource resource = resourceLoader.getResource("classpath:ResumeATSOptimizedLoud.pdf");
+        if (!resource.exists()) {
+            throw new IllegalStateException("Resume PDF not found on classpath");
+        }
+        return resource;
+    }
+
+    private String loadResumeTextFromPdf() throws IOException {
+        Resource resource = resourceLoader.getResource("classpath:ResumeATSOptimizedLoud.pdf");
+        if (!resource.exists()) {
+            throw new IOException("Resume PDF not found");
+        }
+
+        byte[] pdfBytes;
+        try (InputStream inputStream = resource.getInputStream()) {
+            pdfBytes = inputStream.readAllBytes();
+        }
+
+        try (PDDocument document = Loader.loadPDF(pdfBytes)) {
+            PDFTextStripper stripper = new PDFTextStripper();
+            stripper.setLineSeparator("\n");
+            stripper.setSortByPosition(true);
+            String rawText = stripper.getText(document);
+            return formatResumeText(rawText);
+        }
+    }
+
+    private String formatResumeText(String rawText) {
+        if (rawText == null || rawText.isBlank()) {
+            return "Resume text unavailable. Run 'resume --download' to open the PDF.";
+        }
+
+        String normalized = rawText
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+            .replaceAll("[ \t]+\n", "\n")
+            .replaceAll("\n{3,}", "\n\n")
+            .strip();
+
+        String[] paragraphs = normalized.split("\n\n");
+        StringBuilder builder = new StringBuilder();
+        builder.append("╔════════════════════════════════════════════════════════════════════════════════════════════╗\n");
+        for (String paragraph : paragraphs) {
+            for (String line : wrapParagraph(paragraph)) {
+                builder.append("║ ").append(padLine(line)).append(" ║\n");
+            }
+            builder.append("║ ").append(" ".repeat(90)).append(" ║\n");
+        }
+        builder.append("╚════════════════════════════════════════════════════════════════════════════════════════════╝");
+        return builder.toString().replaceAll("\n{2,}╚", "\n╚");
+    }
+
+    private List<String> wrapParagraph(String paragraph) {
+        List<String> lines = new ArrayList<>();
+        String[] rawLines = paragraph.split("\n");
+        for (String rawLine : rawLines) {
+            String line = rawLine.trim();
+            if (line.isEmpty()) {
+                lines.add("");
+                continue;
+            }
+
+            while (line.length() > 90) {
+                int breakIndex = line.lastIndexOf(' ', 90);
+                if (breakIndex <= 0) {
+                    breakIndex = 90;
+                }
+                lines.add(line.substring(0, breakIndex));
+                line = line.substring(breakIndex).trim();
+            }
+            lines.add(line);
+        }
+        return lines;
+    }
+
+    private String padLine(String line) {
+        if (line.length() >= 90) {
+            return line.substring(0, 90);
+        }
+        return line + " ".repeat(90 - line.length());
+    }
+
+    /**
+     * Search blog posts by term (title, tags, content)
+     */
+    public List<BlogMetadata> searchBlogs(String searchTerm) throws IOException {
+        if (searchTerm == null || searchTerm.trim().isEmpty()) {
+            return getBlogList();
+        }
+        
+        String term = searchTerm.toLowerCase();
+        return getBlogList().stream()
+            .filter(blog -> 
+                blog.getTitle().toLowerCase().contains(term) ||
+                blog.getExcerpt().toLowerCase().contains(term) ||
+                blog.getTags().stream().anyMatch(tag -> tag.toLowerCase().contains(term))
+            )
+            .collect(Collectors.toList());
+    }
+
+    /**
+     * Filter portfolio projects by technology
+     */
+    public List<PortfolioMetadata> filterPortfolioByTech(String technology) throws IOException {
+        if (technology == null || technology.trim().isEmpty()) {
+            return getPortfolioList();
+        }
+        
+        String tech = technology.toLowerCase();
+        return getPortfolioList().stream()
+            .filter(project -> 
+                project.getTechnologies().stream()
+                    .anyMatch(t -> t.toLowerCase().contains(tech))
+            )
+            .collect(Collectors.toList());
     }
 }

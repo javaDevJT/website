@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import TypingText from './TypingText';
 import { TypingSpeed } from '../hooks/useTypingEffect';
+import { useTheme } from '../hooks/useTheme';
 import * as asciiArt from '../utils/asciiArt';
 
 const CONTACT_EMAIL = 'joshterk@javadevjt.tech';
@@ -11,13 +12,30 @@ const CONTACT_INFO = `Contact Information:
 Email: ${CONTACT_EMAIL}
 LinkedIn: ${CONTACT_LINKEDIN}`;
 
+const BANNER_WIDTH_CH = '╔════════════════════════════════════════════════════════════════════════════════════════════╗'.length;
+const ICON_ROW_WIDTH_CH = BANNER_WIDTH_CH - 2;
+
 interface CommandOutput {
   command: string;
   output: string;
   type?: 'success' | 'error' | 'info';
 }
 
-const CustomTerminalEnhanced: React.FC = () => {
+interface CustomTerminalEnhancedProps {
+  onToggleScanLines?: () => void;
+  scanLinesEnabled?: boolean;
+}
+
+interface ResumeApiResponse {
+  text?: string;
+  downloadUrl?: string;
+  error?: string;
+}
+
+const CustomTerminalEnhanced: React.FC<CustomTerminalEnhancedProps> = ({ 
+  onToggleScanLines, 
+  scanLinesEnabled = true 
+}) => {
   const [currentPath, setCurrentPath] = useState('/home/visitor');
   const [command, setCommand] = useState('');
   const [history, setHistory] = useState<CommandOutput[]>([]);
@@ -29,8 +47,11 @@ const CustomTerminalEnhanced: React.FC = () => {
   const [suggestionIndex, setSuggestionIndex] = useState(-1);
   const [turboMode, setTurboMode] = useState(false);
   const [secretsUnlocked, setSecretsUnlocked] = useState<string[]>([]);
+  const [resumeDownloadUrl, setResumeDownloadUrl] = useState('/api/content/resume/download');
+  const [resumeTextCache, setResumeTextCache] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const terminalRef = useRef<HTMLDivElement>(null);
+  const { currentTheme, changeTheme, getTheme, listThemes } = useTheme();
 
   // File system structure - will be loaded dynamically
   const [fileSystem, setFileSystem] = useState<any>({
@@ -49,6 +70,36 @@ const CustomTerminalEnhanced: React.FC = () => {
   const unlockSecret = (secret: string) => {
     if (!secretsUnlocked.includes(secret)) {
       setSecretsUnlocked(prev => [...prev, secret]);
+    }
+  };
+
+  const resumeCommand = async (argsLine?: string) => {
+    const normalized = (argsLine || '').trim().toLowerCase();
+    if (normalized === '--download' || normalized === '-d' || normalized === 'download') {
+      window.open(resumeDownloadUrl, '_blank', 'noopener,noreferrer');
+      return 'Opening resume PDF in a new tab...';
+    }
+
+    if (resumeTextCache) {
+      return resumeTextCache;
+    }
+
+    try {
+      const response = await axios.get<ResumeApiResponse>('/api/content/resume');
+      if (response.data?.downloadUrl) {
+        setResumeDownloadUrl(response.data.downloadUrl);
+      }
+      if (response.data?.text) {
+        setResumeTextCache(response.data.text);
+        return response.data.text;
+      }
+      if (response.data?.error) {
+        return response.data.error;
+      }
+      return 'Resume data not available.';
+    } catch (error: any) {
+      console.error('Error fetching resume:', error);
+      return `Unable to load resume (${error.message || 'unknown error'})`;
     }
   };
 
@@ -79,6 +130,20 @@ INFORMATION:
 COMMUNICATION:
   contact     - Show contact information
 
+CONTENT:
+  blog              - List all blog posts
+  blog --search <term> - Search blog posts
+  portfolio         - List portfolio projects
+  portfolio --filter <tech> - Filter by technology
+  resume            - Display ASCII resume
+  resume --download - Download PDF resume
+
+CUSTOMIZATION:
+  theme       - List available themes
+  theme <name> - Change terminal theme
+  turbo       - Toggle instant responses
+  scanlines   - Toggle CRT scan lines effect
+
 FUN STUFF:
   banner      - Display ASCII art banner
   cowsay <msg> - ASCII art message
@@ -98,7 +163,6 @@ TYPE 'secrets' TO SEE DISCOVERED EASTER EGGS`,
     pwd: () => currentPath,
     
     uname: () => `WebTerminal 1.0.0 (Joshua Terk Portfolio)
-Architecture: x64
 Platform: ${navigator.platform}
 User Agent: ${navigator.userAgent}`,
 
@@ -172,6 +236,163 @@ User Agent: ${navigator.userAgent}`,
       setTurboMode(!turboMode);
       return `Turbo Mode ${!turboMode ? 'ENABLED' : 'DISABLED'}! ${!turboMode ? '⚡🏎️💨' : '🐌'}`;
     },
+
+    theme: (themeName?: string) => {
+      if (!themeName) {
+        const themes = listThemes();
+        return `Available themes:
+  ${themes.map(t => t === currentTheme ? `• ${t} (current)` : `  ${t}`).join('\n  ')}
+
+Usage: theme <name>`;
+      }
+      
+      if (changeTheme(themeName.toLowerCase())) {
+        unlockSecret('theme_switcher');
+        return `Theme changed to: ${themeName}`;
+      } else {
+        return `Unknown theme: ${themeName}. Type 'theme' to see available themes.`;
+      }
+    },
+
+    scanlines: () => {
+      if (onToggleScanLines) {
+        onToggleScanLines();
+        return `Scan lines ${!scanLinesEnabled ? 'ENABLED' : 'DISABLED'}! ${!scanLinesEnabled ? '📺 CRT mode activated' : ''}`;
+      }
+      return 'Scan lines toggle not available';
+    },
+
+    blog: async (args?: string) => {
+      try {
+        if (!args || args.trim() === '') {
+          // List all blog posts
+          const response = await axios.get('/api/content/blog/list');
+          const blogs = response.data;
+          
+          if (blogs.length === 0) {
+            return 'No blog posts found.';
+          }
+          
+          let output = '\n╔═══════════════════════════════════════════════════════════════╗\n';
+          output += '║                        BLOG POSTS                             ║\n';
+          output += '╠═══════════════════════════════════════════════════════════════╣\n\n';
+          
+          blogs.forEach((blog: any, index: number) => {
+            output += `${index + 1}. ${blog.title}\n`;
+            if (blog.published) {
+              output += `   Published: ${blog.published}\n`;
+            }
+            if (blog.tags && blog.tags.length > 0) {
+              output += `   Tags: ${blog.tags.join(', ')}\n`;
+            }
+            if (blog.excerpt) {
+              output += `   ${blog.excerpt}\n`;
+            }
+            output += `   Read: ./blog/${blog.filename.replace('.md', '')}\n\n`;
+          });
+          
+          output += '╚═══════════════════════════════════════════════════════════════╝\n';
+          output += '\nUsage: blog --search <term> to search posts';
+          return output;
+        } else if (args.startsWith('--search ') || args.startsWith('-s ')) {
+          // Search blog posts
+          const searchTerm = args.replace(/^(-s|--search)\s+/, '');
+          const response = await axios.get('/api/content/blog/search', { 
+            params: { term: searchTerm } 
+          });
+          const blogs = response.data;
+          
+          if (blogs.length === 0) {
+            return `No blog posts found matching "${searchTerm}"`;
+          }
+          
+          let output = `\nSearch results for "${searchTerm}":\n\n`;
+          blogs.forEach((blog: any, index: number) => {
+            output += `${index + 1}. ${blog.title}\n`;
+            if (blog.excerpt) {
+              output += `   ${blog.excerpt}\n`;
+            }
+            output += `   Read: ./blog/${blog.filename.replace('.md', '')}\n\n`;
+          });
+          
+          return output;
+        } else {
+          return `Unknown option: ${args}\n\nUsage:\n  blog           - List all posts\n  blog --search <term> - Search posts`;
+        }
+      } catch (error) {
+        return 'Error fetching blog posts';
+      }
+    },
+
+    portfolio: async (args?: string) => {
+      try {
+        if (!args || args.trim() === '') {
+          // List all portfolio projects
+          const response = await axios.get('/api/content/portfolio/list');
+          const projects = response.data;
+          
+          if (projects.length === 0) {
+            return 'No portfolio projects found.';
+          }
+          
+          let output = '\n╔═══════════════════════════════════════════════════════════════╗\n';
+          output += '║                    PORTFOLIO PROJECTS                         ║\n';
+          output += '╠═══════════════════════════════════════════════════════════════╣\n\n';
+          
+          projects.forEach((project: any, index: number) => {
+            output += `${index + 1}. ${project.title}\n`;
+            if (project.company) {
+              output += `   Company: ${project.company}`;
+              if (project.year) {
+                output += ` (${project.year})`;
+              }
+              output += '\n';
+            }
+            if (project.technologies && project.technologies.length > 0) {
+              output += `   Tech: ${project.technologies.join(', ')}\n`;
+            }
+            if (project.excerpt) {
+              output += `   ${project.excerpt}\n`;
+            }
+            output += `   View: ./portfolio/${project.filename.replace('.md', '')}\n\n`;
+          });
+          
+          output += '╚═══════════════════════════════════════════════════════════════╝\n';
+          output += '\nUsage: portfolio --filter <tech> to filter by technology';
+          return output;
+        } else if (args.startsWith('--filter ') || args.startsWith('-f ')) {
+          // Filter portfolio by technology
+          const tech = args.replace(/^(-f|--filter)\s+/, '');
+          const response = await axios.get('/api/content/portfolio/filter', { 
+            params: { tech } 
+          });
+          const projects = response.data;
+          
+          if (projects.length === 0) {
+            return `No projects found using "${tech}"`;
+          }
+          
+          let output = `\nProjects using "${tech}":\n\n`;
+          projects.forEach((project: any, index: number) => {
+            output += `${index + 1}. ${project.title}\n`;
+            if (project.technologies && project.technologies.length > 0) {
+              output += `   Tech: ${project.technologies.join(', ')}\n`;
+            }
+            output += `   View: ./portfolio/${project.filename.replace('.md', '')}\n\n`;
+          });
+          
+          return output;
+        } else {
+          return `Unknown option: ${args}\n\nUsage:\n  portfolio               - List all projects\n  portfolio --filter <tech> - Filter by technology`;
+        }
+      } catch (error) {
+        return 'Error fetching portfolio projects';
+      }
+    },
+
+    resume: async (args?: string) => resumeCommand(args),
+
+    cv: async (args?: string) => resumeCommand(args),
 
     coffee: () => {
       unlockSecret('coffee_break');
@@ -460,29 +681,10 @@ powers modern applications.`;
 
 Let's build something amazing.`;
       } else if (filename === 'resume.txt') {
-        return `JOSHUA TERK
-Backend Engineer & SRE Team Lead
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-CONTACT
-  Email: joshterk@javadevjt.tech
-  GitHub: github.com/javadevjt
-  LinkedIn: linkedin.com/in/joshuaterk
-
-EXPERIENCE
-  General Motors | SRE Team Lead (Current)
-  • Lead SRE team for in-vehicle cryptographic systems
-  • Design and implement high-availability distributed systems
-  • Ensure security and reliability of manufacturing operations
-  • Performance optimization and incident response
-
-SKILLS
-  Backend: Java, Spring Boot, Microservices
-  DevOps: Docker, Kubernetes, CI/CD
-  Databases: PostgreSQL, Redis, H2
-  Other: System Architecture, Security, Performance Tuning
-
-Type 'cat about.txt' for more information!`;
+        if (resumeTextCache) {
+          return resumeTextCache;
+        }
+        return `Resume content is pulled directly from the official PDF. Type 'resume' to load it or 'resume --download' to grab the file.`;
       } else {
         return `cat: ${filename}: No such file`;
       }
@@ -623,6 +825,7 @@ Type 'cat about.txt' for more information!`;
     // Don't split by spaces to support filenames with spaces
     if (trimmedCmd.startsWith('./')) {
       const filename = trimmedCmd.substring(2);
+      setCommand('');
       executeFile(filename).then((result: string) => {
         setHistory(prev => [...prev, { command: trimmedCmd, output: result }]);
         setCommandHistory(prev => [...prev, trimmedCmd]);
@@ -650,15 +853,17 @@ Type 'cat about.txt' for more information!`;
       } else if (typeof cmdFunc === 'function') {
         try {
           if (commandKey === 'echo' || commandKey === 'cowsay' || commandKey === 'man' || 
-              commandKey === 'find' || commandKey === 'grep' || commandKey === 'sudo') {
-            output = cmdFunc(args.join(' '));
+              commandKey === 'find' || commandKey === 'grep' || commandKey === 'sudo' || 
+              commandKey === 'theme' || commandKey === 'blog' || commandKey === 'portfolio' ||
+              commandKey === 'resume' || commandKey === 'cv') {
+            output = await cmdFunc(args.join(' '));
           } else if (commandKey === 'cd') {
             output = cmdFunc(args[0] || '');
             outputType = 'success';
           } else if (commandKey === 'cat') {
-            output = cmdFunc(args[0] || '');
+            output = await cmdFunc(args[0] || '');
           } else {
-            output = cmdFunc();
+            output = await cmdFunc();
           }
         } catch (error: any) {
           output = `Error executing ${commandName}: ${error.message}`;
@@ -804,8 +1009,58 @@ Type 'cat about.txt' for more information!`;
     return path;
   };
 
-  const welcomeMessage = `
-╔════════════════════════════════════════════════════════════════════════════════════════════╗
+  const theme = getTheme();
+
+  const getOutputColor = (type?: 'success' | 'error' | 'info') => {
+    switch (type) {
+      case 'success': return theme.success;
+      case 'error': return theme.error;
+      case 'info':
+      default: return theme.info;
+    }
+  };
+
+  return (
+    <div 
+      role="application"
+      aria-label="Terminal interface"
+      style={{
+        fontFamily: 'Fira Code, monospace',
+        backgroundColor: theme.background,
+        color: theme.text,
+        height: '100vh',
+        width: '100vw',
+        padding: '20px',
+        overflow: 'hidden'
+      }}>
+      <div
+        ref={terminalRef}
+        role="log"
+        aria-live="polite"
+        aria-atomic="false"
+        aria-relevant="additions"
+        style={{
+          height: '100%',
+          overflowY: 'auto',
+          whiteSpace: 'pre-wrap',
+          fontSize: '14px',
+          lineHeight: '1.4'
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center'
+          }}
+        >
+          <pre
+            style={{
+              margin: 0,
+              display: 'inline-block',
+              textAlign: 'left'
+            }}
+          >
+{`╔════════════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                            ║
 ║       ██╗ ██████╗ ███████╗██╗  ██╗██╗   ██╗ █████╗     ████████╗███████╗██████╗ ██╗  ██╗   ║
 ║       ██║██╔═══██╗██╔════╝██║  ██║██║   ██║██╔══██╗    ╚══██╔══╝██╔════╝██╔══██╗██║ ██╔╝   ║
@@ -817,6 +1072,79 @@ Type 'cat about.txt' for more information!`;
 ║              Backend Engineer & In-Vehicle Product Cybersecurity SRE Team Lead             ║
 ║                                       General Motors                                       ║
 ║                                                                                            ║
+║                                                                                            ║
+║`}<span
+              style={{
+                display: 'inline-flex',
+                width: `${ICON_ROW_WIDTH_CH}ch`,
+                maxWidth: '100%',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '16px',
+                padding: '0 8px',
+                boxSizing: 'border-box'
+              }}
+            >
+                <a
+                  href="mailto:joshterk@javadevjt.tech"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ display: 'inline-flex', alignItems: 'center' }}
+                >
+                  <img
+                    src="/email.png"
+                    alt="Email"
+                    style={{ height: '16px', width: '16px', verticalAlign: 'middle' }}
+                  />
+                </a>
+                <a
+                  href="https://linkedin.com/in/joshuaterk"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ display: 'inline-flex', alignItems: 'center' }}
+                >
+                  <img
+                    src="/linkedin.png"
+                    alt="LinkedIn"
+                    style={{ height: '16px', width: '16px', verticalAlign: 'middle' }}
+                  />
+                </a>
+                <a
+                  href="https://github.com/javadevjt"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ display: 'inline-flex', alignItems: 'center' }}
+                >
+                  <img
+                    src="/github.png"
+                    alt="GitHub"
+                    style={{
+                      height: '16px',
+                      width: '16px',
+                      verticalAlign: 'middle',
+                      filter: currentTheme !== 'light' ? 'invert(1)' : 'none'
+                    }}
+                  />
+                </a>
+                <a
+                  href="https://x.com/realJoshuaTerk"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ display: 'inline-flex', alignItems: 'center' }}
+                >
+                  <img
+                    src="/x.png"
+                    alt="X/Twitter"
+                    style={{
+                      height: '16px',
+                      width: '16px',
+                      verticalAlign: 'middle',
+                      filter: currentTheme !== 'light' ? 'invert(1)' : 'none'
+                    }}
+                  />
+                </a>
+            </span>{`║
+║                                                                                            ║
 ╚════════════════════════════════════════════════════════════════════════════════════════════╝
 
 Welcome to Joshua Terk's Terminal Portfolio
@@ -824,42 +1152,12 @@ Welcome to Joshua Terk's Terminal Portfolio
 Type 'help' to see available commands or try exploring on your own!
 Current location: ${currentPath}
 ${turboMode ? '⚡ TURBO MODE ENABLED ⚡' : ''}
-
-`;
-
-  const getOutputColor = (type?: 'success' | 'error' | 'info') => {
-    switch (type) {
-      case 'success': return '#00ff00';
-      case 'error': return '#ff5555';
-      case 'info':
-      default: return '#ffffff';
-    }
-  };
-
-  return (
-    <div style={{
-      fontFamily: 'Fira Code, monospace',
-      backgroundColor: '#000',
-      color: '#00ff00',
-      height: '100vh',
-      width: '100vw',
-      padding: '20px',
-      overflow: 'hidden'
-    }}>
-      <div
-        ref={terminalRef}
-        style={{
-          height: '100%',
-          overflowY: 'auto',
-          whiteSpace: 'pre-wrap',
-          fontSize: '14px',
-          lineHeight: '1.4'
-        }}
-      >
-        <div>{welcomeMessage}</div>
+`}
+          </pre>
+        </div>
         {history.map((item, index) => (
           <div key={index}>
-            <div style={{ color: '#00ff00' }}>
+            <div style={{ color: theme.prompt }}>
               {clientInfo?.username || 'visitor'}@{hostname}:{getDisplayPath(currentPath)}$ {item.command}
             </div>
             <div style={{ color: getOutputColor(item.type), marginBottom: '10px' }}>
@@ -872,7 +1170,11 @@ ${turboMode ? '⚡ TURBO MODE ENABLED ⚡' : ''}
           </div>
         ))}
         <div style={{ display: 'flex', alignItems: 'center' }}>
-          <span style={{ color: '#00ff00', marginRight: '10px' }}>
+          <span 
+            id="terminal-prompt"
+            style={{ color: theme.prompt, marginRight: '10px' }}
+            aria-label={`Current directory: ${getDisplayPath(currentPath)}`}
+          >
             {`${clientInfo?.username || 'visitor'}@${hostname}:${getDisplayPath(currentPath)}$`}
           </span>
           <input
@@ -881,10 +1183,12 @@ ${turboMode ? '⚡ TURBO MODE ENABLED ⚡' : ''}
             value={command}
             onChange={(e) => setCommand(e.target.value)}
             onKeyDown={handleKeyDown}
+            aria-label="Terminal command input"
+            aria-describedby="terminal-prompt"
             style={{
               background: 'transparent',
               border: 'none',
-              color: '#00ff00',
+              color: theme.text,
               fontFamily: 'inherit',
               fontSize: 'inherit',
               outline: 'none',
@@ -904,7 +1208,7 @@ ${turboMode ? '⚡ TURBO MODE ENABLED ⚡' : ''}
               <span
                 key={suggestion}
                 style={{
-                  color: index === suggestionIndex ? '#00ff00' : '#888',
+                  color: index === suggestionIndex ? theme.success : '#888',
                   marginRight: '10px'
                 }}
               >

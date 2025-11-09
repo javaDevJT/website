@@ -1,12 +1,23 @@
 import { useState, useEffect } from 'react';
+import ErrorBoundary from './components/ErrorBoundary';
 import BootSequence from './components/BootSequence';
 import CustomTerminalEnhanced from './components/CustomTerminalEnhanced';
+import ScanLines from './components/ScanLines';
 
 function App() {
   const [showBoot, setShowBoot] = useState(() => {
     // Only show boot sequence once per session
     const hasBooted = sessionStorage.getItem('hasBooted');
     return !hasBooted;
+  });
+
+  const [scanLinesEnabled, setScanLinesEnabled] = useState(() => {
+    // Load scan lines preference from localStorage
+    const saved = localStorage.getItem('scanlines-enabled');
+    if (saved === null) {
+      return true;
+    }
+    return saved === 'true';
   });
 
   const handleBootComplete = () => {
@@ -26,11 +37,28 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [showBoot]);
 
+  // Update scan lines preference
+  useEffect(() => {
+    localStorage.setItem('scanlines-enabled', scanLinesEnabled.toString());
+  }, [scanLinesEnabled]);
+
   if (showBoot) {
-    return <BootSequence onComplete={handleBootComplete} />;
+    return (
+      <ErrorBoundary>
+        <BootSequence onComplete={handleBootComplete} />
+      </ErrorBoundary>
+    );
   }
 
-  return <CustomTerminalEnhanced />;
+  return (
+    <ErrorBoundary>
+      <ScanLines enabled={scanLinesEnabled} />
+      <CustomTerminalEnhanced 
+        onToggleScanLines={() => setScanLinesEnabled(!scanLinesEnabled)}
+        scanLinesEnabled={scanLinesEnabled}
+      />
+    </ErrorBoundary>
+  );
 }
 
 export default App;

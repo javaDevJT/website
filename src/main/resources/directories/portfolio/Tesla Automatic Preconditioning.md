@@ -1,9 +1,14 @@
+title: Tesla Automatic Preconditioning
+type: Personal Project
+year: 2025
+technologies: Java 21, Spring Boot 3.5, PostgreSQL, Docker, Tesla Fleet API, Google Calendar API, Google Maps API, Google Weather API, Liquibase, Maven, Spring Security, JPA
+
 # Tesla Automatic Preconditioning
 
 ## Project Overview
 
 **Type:** Personal Project  
-**Tech Stack:** Spring Boot, Tesla API, Docker, PostgreSQL  
+**Tech Stack:** Spring Boot, Tesla API, Docker  
 **Status:** Active & In Production  
 **GitHub:** https://github.com/javaDevJT/Tesla-Automatic-Preconditioning
 
@@ -40,24 +45,24 @@ Intelligent automation system that preconditions Tesla vehicles based on calenda
 
 ## Key Features
 
-### 📅 Calendar Integration
+### Calendar Integration
 - Syncs with Google Calendar to detect upcoming events
 - Automatically preconditions vehicle 15-30 minutes before departure
 - Respects event locations (home vs. work vs. other)
 - Configurable lead time based on weather conditions
 
-### 🌡️ Weather-Aware Preconditioning
+### Weather-Aware Preconditioning
 - Integrates with weather APIs to determine optimal preconditioning time
 - Extends preconditioning duration in extreme temperatures
 - Adjusts climate settings based on forecast (heat/cool)
 - Battery-friendly scheduling (avoids excessive drain)
 
-### 🧠 Smart Adjustments
+### Smart Adjustments
 - Learns daily routines and patterns over time
 - Adapts to changes in schedule automatically
 - Overrides manual preconditioning when necessary
 
-### 🔐 Security & Privacy
+### Security & Privacy
 - Encrypted token storage
 - No third-party data sharing
 - Self-hosted deployment option
