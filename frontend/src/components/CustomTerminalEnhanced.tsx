@@ -3,7 +3,13 @@ import axios from 'axios';
 import TypingText from './TypingText';
 import { TypingSpeed } from '../hooks/useTypingEffect';
 import * as asciiArt from '../utils/asciiArt';
-import { useContactForm } from '../hooks/useContactForm';
+
+const CONTACT_EMAIL = 'joshterk@javadevjt.tech';
+const CONTACT_LINKEDIN = 'https://www.linkedin.com/in/joshuaterk/';
+const CONTACT_INFO = `Contact Information:
+
+Email: ${CONTACT_EMAIL}
+LinkedIn: ${CONTACT_LINKEDIN}`;
 
 interface CommandOutput {
   command: string;
@@ -23,12 +29,8 @@ const CustomTerminalEnhanced: React.FC = () => {
   const [suggestionIndex, setSuggestionIndex] = useState(-1);
   const [turboMode, setTurboMode] = useState(false);
   const [secretsUnlocked, setSecretsUnlocked] = useState<string[]>([]);
-  const [contactMode, setContactMode] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const terminalRef = useRef<HTMLDivElement>(null);
-  
-  // Contact form hook
-  const contactForm = useContactForm();
 
   // File system structure - will be loaded dynamically
   const [fileSystem, setFileSystem] = useState<any>({
@@ -75,7 +77,7 @@ INFORMATION:
   man <cmd>   - Manual for command
 
 COMMUNICATION:
-  contact     - Interactive contact form
+  contact     - Show contact information
 
 FUN STUFF:
   banner      - Display ASCII art banner
@@ -86,7 +88,6 @@ FUN STUFF:
   
 AUTOMOTIVE:
   car         - Show dream car
-  engine      - Engine visualization
   diagnostics - System diagnostics
   vtec        - You know what this does...
   
@@ -121,11 +122,6 @@ User Agent: ${navigator.userAgent}`,
     car: () => {
       unlockSecret('automotive_enthusiast');
       return asciiArt.carAscii();
-    },
-
-    engine: () => {
-      unlockSecret('gearhead');
-      return asciiArt.engineAscii();
     },
 
     diagnostics: () => {
@@ -460,20 +456,9 @@ With a strong foundation in computer science and years of experience in backend 
 I specialize in turning complex business requirements into efficient, maintainable code that
 powers modern applications.`;
       } else if (filename === 'contact.txt') {
-        return `Contact Information:
+        return `${CONTACT_INFO}
 
-Email: joshterk@javadevjt.tech
-GitHub: https://www.github.com/javadevjt
-LinkedIn: https://www.linkedin.com/in/joshuaterk/
-
-I'm always interested in discussing new opportunities, especially in:
-• Backend Engineering & Architecture
-• Site Reliability Engineering
-• System Performance & Scalability
-• Distributed Systems
-• Automotive Technology & Software
-
-Feel free to reach out!`;
+Let's build something amazing.`;
       } else if (filename === 'resume.txt') {
         return `JOSHUA TERK
 Backend Engineer & SRE Team Lead
@@ -528,19 +513,14 @@ Type 'cat about.txt' for more information!`;
       return '';
     },
 
-    contact: () => {
-      setContactMode(true);
-      contactForm.reset();
-      return `
+    contact: () => `
 ╔════════════════════════════════════════════════════════════╗
-║              INTERACTIVE CONTACT FORM                      ║
+║                     CONTACT DETAILS                        ║
 ╠════════════════════════════════════════════════════════════╣
-║  Let's get in touch! Please fill out the following:       ║
-║  (Type Ctrl+C to cancel at any time)                       ║
+║  Email: joshterk@javadevjt.tech                            ║
+║  LinkedIn: https://www.linkedin.com/in/joshuaterk/         ║
 ╚════════════════════════════════════════════════════════════╝
-
-Name:`;
-    }
+`
   };
 
   const getCurrentDirectory = () => {
@@ -639,47 +619,6 @@ Name:`;
     const trimmedCmd = cmd.trim();
     if (!trimmedCmd) return;
 
-    // Handle contact mode
-    if (contactMode) {
-      // Allow Ctrl+C to cancel (though this is handled in handleKeyDown)
-      if (trimmedCmd.toLowerCase() === 'exit' || trimmedCmd.toLowerCase() === 'cancel') {
-        setContactMode(false);
-        contactForm.reset();
-        setHistory(prev => [...prev, { 
-          command: trimmedCmd, 
-          output: 'Contact form cancelled.', 
-          type: 'info' 
-        }]);
-        setCommandHistory(prev => [...prev, trimmedCmd]);
-        return;
-      }
-
-      // Process contact form input
-      try {
-        const response = await contactForm.handleInput(trimmedCmd);
-        setHistory(prev => [...prev, { 
-          command: trimmedCmd, 
-          output: response,
-          type: contactForm.error ? 'error' : 'success'
-        }]);
-        setCommandHistory(prev => [...prev, trimmedCmd]);
-
-        // If form is complete, exit contact mode
-        if (contactForm.currentField === 'complete') {
-          setContactMode(false);
-        }
-      } catch (error: any) {
-        setHistory(prev => [...prev, { 
-          command: trimmedCmd, 
-          output: `Error: ${error.message}`, 
-          type: 'error' 
-        }]);
-        setCommandHistory(prev => [...prev, trimmedCmd]);
-        setContactMode(false);
-      }
-      return;
-    }
-
     // Special handling for file execution (./ prefix)
     // Don't split by spaces to support filenames with spaces
     if (trimmedCmd.startsWith('./')) {
@@ -737,20 +676,6 @@ Name:`;
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    // Handle Ctrl+C to cancel contact mode
-    if (e.ctrlKey && e.key === 'c' && contactMode) {
-      e.preventDefault();
-      setContactMode(false);
-      contactForm.reset();
-      setHistory(prev => [...prev, { 
-        command: '^C', 
-        output: 'Contact form cancelled.', 
-        type: 'info' 
-      }]);
-      setCommand('');
-      return;
-    }
-
     if (e.key === 'Enter') {
       executeCommand(command);
       setSuggestions([]);
@@ -868,6 +793,17 @@ Name:`;
 
   const typingSpeed: TypingSpeed = turboMode ? 'instant' : 'fast';
 
+  // Format path for display: /home/visitor -> ~, /home/visitor/portfolio -> ~/portfolio
+  const getDisplayPath = (path: string) => {
+    const homePath = `/home/${clientInfo?.username || 'visitor'}`;
+    if (path === homePath) {
+      return '~';
+    } else if (path.startsWith(homePath + '/')) {
+      return '~' + path.substring(homePath.length);
+    }
+    return path;
+  };
+
   const welcomeMessage = `
 ╔════════════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                            ║
@@ -924,7 +860,7 @@ ${turboMode ? '⚡ TURBO MODE ENABLED ⚡' : ''}
         {history.map((item, index) => (
           <div key={index}>
             <div style={{ color: '#00ff00' }}>
-              {clientInfo?.username || 'visitor'}@{hostname}:~$ {item.command}
+              {clientInfo?.username || 'visitor'}@{hostname}:{getDisplayPath(currentPath)}$ {item.command}
             </div>
             <div style={{ color: getOutputColor(item.type), marginBottom: '10px' }}>
               <TypingText 
@@ -937,7 +873,7 @@ ${turboMode ? '⚡ TURBO MODE ENABLED ⚡' : ''}
         ))}
         <div style={{ display: 'flex', alignItems: 'center' }}>
           <span style={{ color: '#00ff00', marginRight: '10px' }}>
-            {contactMode ? '>' : `${clientInfo?.username || 'visitor'}@${hostname}:~$`}
+            {`${clientInfo?.username || 'visitor'}@${hostname}:${getDisplayPath(currentPath)}$`}
           </span>
           <input
             ref={inputRef}

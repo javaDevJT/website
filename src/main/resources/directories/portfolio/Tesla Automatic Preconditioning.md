@@ -13,7 +13,6 @@ Intelligent automation system that preconditions Tesla vehicles based on calenda
 
 ## Architecture
 
-```
 ┌────────────────┐
 │ Google Calendar│ Calendar Events (Departure Times)
 └───────┬────────┘
@@ -38,7 +37,6 @@ Intelligent automation system that preconditions Tesla vehicles based on calenda
 │                │ • Learned Preferences
 │                │ • Event Logs
 └────────────────┘
-```
 
 ## Key Features
 

@@ -1,26 +1,24 @@
 package com.jtdev.website.controller;
 
-import com.jtdev.website.model.ContactMessage;
-import com.jtdev.website.repository.ContactMessageRepository;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.CrossOrigin;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 
-import java.time.LocalDateTime;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/contact")
 @CrossOrigin(origins = {"http://localhost:8080", "http://javadevjt.tech", "https://javadevjt.tech"})
 public class ContactController {
 
-    private final ContactMessageRepository contactMessageRepository;
-
-    public ContactController(ContactMessageRepository contactMessageRepository) {
-        this.contactMessageRepository = contactMessageRepository;
-    }
-
-    @PostMapping
-    public Mono<ContactMessage> submitContact(@RequestBody ContactMessage contactMessage) {
-        contactMessage.setSubmittedDate(LocalDateTime.now());
-        return Mono.just(contactMessageRepository.save(contactMessage));
+    @GetMapping
+    public Mono<Map<String, String>> getContactInformation() {
+        Map<String, String> contactInfo = Map.of(
+                "email", "joshterk@javadevjt.tech",
+                "linkedin", "https://www.linkedin.com/in/joshuaterk/"
+        );
+        return Mono.just(contactInfo);
     }
 }
