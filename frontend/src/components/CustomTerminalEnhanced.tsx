@@ -417,7 +417,6 @@ Try some commands you might not expect to work. 😉`;
       const secretDescriptions: Record<string, string> = {
         'konami_code': '🎮 Konami Code Master',
         'automotive_enthusiast': '🏎️ Automotive Enthusiast',
-        'gearhead': '🔧 Gearhead',
         'mechanic': '🛠️ Mechanic',
         'vtec_kicked_in': '⚡ VTEC Activated',
         'gm_employee': '🏭 GM Insider',
