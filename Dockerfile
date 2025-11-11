@@ -57,7 +57,7 @@ RUN chown -R spring:spring /app
 USER spring:spring
 
 # Expose port
-EXPOSE 8080
+EXPOSE 10091
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
