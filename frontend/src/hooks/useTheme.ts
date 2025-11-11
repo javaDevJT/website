@@ -75,6 +75,22 @@ export const useTheme = () => {
 
   useEffect(() => {
     localStorage.setItem('terminal-theme', currentTheme);
+    // Dispatch a custom event to notify other components
+    window.dispatchEvent(new CustomEvent('theme-changed', { detail: currentTheme }));
+  }, [currentTheme]);
+
+  // Listen for theme changes from other components
+  useEffect(() => {
+    const handleThemeChange = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      const newTheme = customEvent.detail;
+      if (newTheme !== currentTheme) {
+        setCurrentTheme(newTheme);
+      }
+    };
+
+    window.addEventListener('theme-changed', handleThemeChange);
+    return () => window.removeEventListener('theme-changed', handleThemeChange);
   }, [currentTheme]);
 
   const changeTheme = (themeName: string) => {

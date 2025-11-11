@@ -10,9 +10,9 @@
     </parent>
     <groupId>com.jtdev</groupId>
     <artifactId>website</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>1.0.0</version>
     <name>website</name>
-    <description>website</description>
+    <description>Joshua Terk Personal Website - Terminal-themed portfolio with tools showcase</description>
     <url/>
     <licenses>
         <license/>

@@ -126,6 +126,54 @@ website/
 - **Frontend**: React, TypeScript, Tailwind CSS, Framer Motion, Axios
 - **Build Tools**: Maven, Vite
 
+## Deployment
+
+### Container Image
+Build multi-architecture container images using Podman:
+
+```bash
+# Build the application
+./mvnw clean package
+
+# Build for amd64 architecture
+podman build --arch amd64 -t website:amd64-latest .
+
+# Build for arm64 architecture  
+podman build --arch arm64 -t website:arm64-latest .
+
+# Create a multi-architecture manifest
+podman manifest create website:latest
+
+# Add both architecture images to the manifest
+podman manifest add website:latest website:amd64-latest
+podman manifest add website:latest website:arm64-latest
+
+# Push the manifest to your registry
+podman manifest push website:latest docker://your-registry.com/website:latest
+```
+
+### Running with Podman
+```bash
+# Run the container on port 8080
+podman run -d -p 8080:8080 --name personal-website website:latest
+
+# Run with environment variables (if using PostgreSQL)
+podman run -d -p 8080:8080 \
+  -e SPRING_DATASOURCE_URL=jdbc:postgresql://db:5432/website \
+  -e SPRING_DATASOURCE_USERNAME=dbuser \
+  -e SPRING_DATASOURCE_PASSWORD=dbpass \
+  --name personal-website website:latest
+
+# View logs
+podman logs -f personal-website
+
+# Stop the container
+podman stop personal-website
+
+# Remove the container
+podman rm personal-website
+```
+
 ## Contributing
 
 1. Fork the repository

@@ -3,6 +3,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import BootSequence from './components/BootSequence';
 import CustomTerminalEnhanced from './components/CustomTerminalEnhanced';
 import ScanLines from './components/ScanLines';
+import ToolsDrawer from './components/ToolsDrawer';
 
 function App() {
   const [showBoot, setShowBoot] = useState(() => {
@@ -57,6 +58,7 @@ function App() {
         onToggleScanLines={() => setScanLinesEnabled(!scanLinesEnabled)}
         scanLinesEnabled={scanLinesEnabled}
       />
+      <ToolsDrawer />
     </ErrorBoundary>
   );
 }

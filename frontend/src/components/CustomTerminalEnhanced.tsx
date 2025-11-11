@@ -60,6 +60,7 @@ const CustomTerminalEnhanced: React.FC<CustomTerminalEnhancedProps> = ({
       contents: {
         'portfolio': { type: 'directory', contents: {} },
         'blog': { type: 'directory', contents: {} },
+        'tools': { type: 'directory', contents: {} },
         'about.txt': { type: 'file' },
         'contact.txt': { type: 'file' },
         'resume.txt': { type: 'file' }
@@ -107,11 +108,11 @@ const CustomTerminalEnhanced: React.FC<CustomTerminalEnhancedProps> = ({
     help: `Available commands:
 
 NAVIGATION:
-  cd <dir>    - Change directory
-  ls          - List directory contents
-  ll          - Long list directory contents
-  pwd         - Print working directory
-  tree        - Visual directory tree
+  cd <dir>      - Change directory
+  ls [path]     - List directory contents (try: ls /tools)
+  ll            - Long list directory contents
+  pwd           - Print working directory
+  tree          - Visual directory tree
 
 FILE OPERATIONS:
   cat <file>  - Display file contents
@@ -494,7 +495,7 @@ Try some commands you might not expect to work. 😉`;
 
       const manPages: Record<string, string> = {
         help: 'HELP(1)\n\nNAME\n    help - display available commands\n\nSYNOPSIS\n    help\n\nDESCRIPTION\n    Displays a list of all available terminal commands.',
-        ls: 'LS(1)\n\nNAME\n    ls - list directory contents\n\nSYNOPSIS\n    ls\n\nDESCRIPTION\n    Lists files and directories in the current directory.',
+        ls: 'LS(1)\n\nNAME\n    ls - list directory contents\n\nSYNOPSIS\n    ls [pathname]\n\nDESCRIPTION\n    Lists files and directories in the current directory or specified path.\n    Use "ls /tools" to open the tools drawer.',
         cd: 'CD(1)\n\nNAME\n    cd - change directory\n\nSYNOPSIS\n    cd <directory>\n\nDESCRIPTION\n    Changes the current directory to the specified path.',
         cat: 'CAT(1)\n\nNAME\n    cat - concatenate and display file contents\n\nSYNOPSIS\n    cat <filename>\n\nDESCRIPTION\n    Displays the contents of the specified file.',
         cowsay: 'COWSAY(1)\n\nNAME\n    cowsay - ASCII art speaking cow\n\nSYNOPSIS\n    cowsay <message>\n\nDESCRIPTION\n    Generates an ASCII art cow saying your message.',
@@ -583,19 +584,93 @@ Try some commands you might not expect to work. 😉`;
       }
     },
 
-    ls: () => {
-      const currentDir = getCurrentDirectory();
-      if (!currentDir || !currentDir.contents) {
-        return 'ls: cannot access current directory';
+    ls: (pathname?: string) => {
+      let targetPath = currentPath;
+
+      // If pathname is provided, resolve it
+      if (pathname && pathname.trim() !== '') {
+        const cleanPath = pathname.trim();
+        
+        // Handle absolute paths
+        if (cleanPath.startsWith('/')) {
+          targetPath = cleanPath;
+        } 
+        // Handle home directory shortcuts
+        else if (cleanPath === '~') {
+          targetPath = `/home/${clientInfo?.username || 'visitor'}`;
+        }
+        // Handle relative paths
+        else if (cleanPath === '..') {
+          const pathParts = currentPath.split('/').filter(p => p);
+          if (pathParts.length > 2) {
+            pathParts.pop();
+            targetPath = '/' + pathParts.join('/');
+          }
+        }
+        // Relative to current directory
+        else {
+          targetPath = `${currentPath}/${cleanPath}`.replace(/\/+/g, '/');
+        }
       }
 
-      const items = Object.keys(currentDir.contents);
+      // Special handling for /tools or ~/tools
+      if (targetPath === '/home/visitor/tools' || targetPath.endsWith('/tools')) {
+        // Trigger tools drawer opening
+        setTimeout(() => {
+          const toolsButton = document.querySelector('button[title*="Tools"]') as HTMLButtonElement;
+          if (toolsButton) {
+            toolsButton.click();
+          }
+        }, 100);
+        return `Opening tools directory...`;
+      }
+
+      // Navigate to the target directory in the filesystem
+      // Start from the root of the filesystem
+      let targetDir: any = null;
+      
+      // Check if the path exists in our filesystem
+      if (fileSystem[targetPath]) {
+        targetDir = fileSystem[targetPath];
+      } else {
+        // Try to navigate from /home/visitor
+        const homePath = `/home/${clientInfo?.username || 'visitor'}`;
+        if (fileSystem[homePath]) {
+          let current = fileSystem[homePath];
+          
+          // If looking at home path itself
+          if (targetPath === homePath) {
+            targetDir = current;
+          } else if (targetPath.startsWith(homePath + '/')) {
+            // Navigate through subdirectories
+            const relativePath = targetPath.substring(homePath.length + 1);
+            const segments = relativePath.split('/').filter(p => p);
+            
+            for (const segment of segments) {
+              if (current && current.contents && current.contents[segment]) {
+                current = current.contents[segment];
+              } else {
+                return `ls: cannot access '${pathname}': No such file or directory`;
+              }
+            }
+            targetDir = current;
+          } else {
+            return `ls: cannot access '${pathname}': No such file or directory`;
+          }
+        }
+      }
+
+      if (!targetDir || !targetDir.contents) {
+        return `ls: cannot access '${pathname || currentPath}': Not a directory`;
+      }
+
+      const items = Object.keys(targetDir.contents);
       if (items.length === 0) {
         return '';
       }
 
       return items.map(item => {
-        const entry = currentDir.contents[item];
+        const entry = targetDir.contents[item];
         if (entry.type === 'directory') {
           return `${item}/`;
         } else if (entry.type === 'executable') {
@@ -861,6 +936,8 @@ Let's build something amazing.`;
             outputType = 'success';
           } else if (commandKey === 'cat') {
             output = await cmdFunc(args[0] || '');
+          } else if (commandKey === 'ls') {
+            output = cmdFunc(args[0] || '');
           } else {
             output = await cmdFunc();
           }
@@ -995,6 +1072,55 @@ Let's build something amazing.`;
     }
   }, [history]);
 
+  // Keep input focused at all times (unless user is interacting with tools drawer)
+  useEffect(() => {
+    const handleFocus = (e: FocusEvent) => {
+      // Don't steal focus if user clicked on tools drawer or its button
+      const target = e.target as HTMLElement;
+      const isDrawerOrButton = target?.closest('[style*="right: 0"]') || 
+                                target?.closest('button[title*="Tools"]');
+      
+      if (!isDrawerOrButton && inputRef.current && document.activeElement !== inputRef.current) {
+        inputRef.current.focus();
+      }
+    };
+
+    const handleClick = (e: MouseEvent) => {
+      // Don't steal focus if user clicked on tools drawer or its button
+      const target = e.target as HTMLElement;
+      const isDrawerOrButton = target?.closest('[style*="right: 0"]') || 
+                                target?.closest('button[title*="Tools"]');
+      
+      if (!isDrawerOrButton && inputRef.current) {
+        inputRef.current.focus();
+      }
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Focus input on any keypress (except modifier keys alone)
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && inputRef.current && document.activeElement !== inputRef.current) {
+        const target = e.target as HTMLElement;
+        const isDrawerOrButton = target?.closest('[style*="right: 0"]') || 
+                                  target?.closest('button[title*="Tools"]');
+        
+        if (!isDrawerOrButton) {
+          inputRef.current.focus();
+        }
+      }
+    };
+
+    // Add event listeners
+    window.addEventListener('click', handleClick);
+    window.addEventListener('focusin', handleFocus);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('click', handleClick);
+      window.removeEventListener('focusin', handleFocus);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
+
   const typingSpeed: TypingSpeed = turboMode ? 'instant' : 'fast';
 
   // Format path for display: /home/visitor -> ~, /home/visitor/portfolio -> ~/portfolio
@@ -1023,6 +1149,12 @@ Let's build something amazing.`;
     <div 
       role="application"
       aria-label="Terminal interface"
+      onClick={() => {
+        // Click anywhere on terminal to focus input
+        if (inputRef.current) {
+          inputRef.current.focus();
+        }
+      }}
       style={{
         fontFamily: 'Fira Code, monospace',
         backgroundColor: theme.background,
@@ -1030,7 +1162,9 @@ Let's build something amazing.`;
         height: '100vh',
         width: '100vw',
         padding: '20px',
-        overflow: 'hidden'
+        overflow: 'hidden',
+        position: 'relative',
+        cursor: 'text',
       }}>
       <div
         ref={terminalRef}
