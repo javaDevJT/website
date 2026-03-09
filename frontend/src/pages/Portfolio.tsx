@@ -3,6 +3,13 @@ import { motion } from 'framer-motion';
 const Portfolio = () => {
   const projects = [
     {
+      title: 'dockerized-imap-sync',
+      description: 'A standalone Docker container that runs imapsync every 3 minutes to continuously mirror one IMAP mailbox to another — a drop-in replacement for a Kubernetes CronJob.',
+      tech: ['Docker', 'imapsync', 'Shell', 'GitHub Actions'],
+      gradient: 'from-cyan-500 to-blue-500',
+      link: 'https://github.com/javaDevJT/dockerized-imap-sync'
+    },
+    {
       title: 'DTE Rates for Home Assistant',
       description: 'A Home Assistant custom integration that pulls the official DTE residential electric rate card PDF, parses rates dynamically, and exposes import/export price entities that track time-of-day and season.',
       tech: ['Python', 'Home Assistant', 'HACS', 'Lovelace'],
