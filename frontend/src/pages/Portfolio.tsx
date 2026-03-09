@@ -3,6 +3,13 @@ import { motion } from 'framer-motion';
 const Portfolio = () => {
   const projects = [
     {
+      title: 'DTE Rates for Home Assistant',
+      description: 'A Home Assistant custom integration that pulls the official DTE residential electric rate card PDF, parses rates dynamically, and exposes import/export price entities that track time-of-day and season.',
+      tech: ['Python', 'Home Assistant', 'HACS', 'Lovelace'],
+      gradient: 'from-yellow-500 to-orange-500',
+      link: 'https://github.com/javaDevJT/DTE-Rates-for-Home-Assistant'
+    },
+    {
       title: 'Interactive Dashboard',
       description: 'A sleek dashboard for monitoring automotive performance data with real-time visualizations.',
       tech: ['React', 'D3.js', 'Node.js'],
@@ -81,13 +88,26 @@ const Portfolio = () => {
                     </span>
                   ))}
                 </div>
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  className="bg-gradient-to-r from-blue-500 to-purple-600 text-white px-6 py-2 rounded-full font-semibold shadow-lg hover:shadow-xl transition"
-                >
-                  View Project
-                </motion.button>
+                {project.link ? (
+                  <motion.a
+                    href={project.link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    className="inline-block bg-gradient-to-r from-blue-500 to-purple-600 text-white px-6 py-2 rounded-full font-semibold shadow-lg hover:shadow-xl transition"
+                  >
+                    View Project
+                  </motion.a>
+                ) : (
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    className="bg-gradient-to-r from-blue-500 to-purple-600 text-white px-6 py-2 rounded-full font-semibold shadow-lg hover:shadow-xl transition"
+                  >
+                    View Project
+                  </motion.button>
+                )}
               </div>
             </motion.div>
           ))}
