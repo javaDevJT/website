@@ -2,6 +2,7 @@ package com.jtdev.website.service;
 
 import com.jtdev.website.model.BlogMetadata;
 import com.jtdev.website.model.PortfolioMetadata;
+import com.vladsch.flexmark.ext.tables.TablesExtension;
 import com.vladsch.flexmark.html.HtmlRenderer;
 import com.vladsch.flexmark.parser.Parser;
 import com.vladsch.flexmark.util.ast.Node;
@@ -72,6 +73,7 @@ public class ContentService {
 
         // Parse markdown and convert to ASCII-friendly format
         MutableDataSet options = new MutableDataSet();
+        options.set(Parser.EXTENSIONS, java.util.Arrays.asList(TablesExtension.create()));
         Parser parser = Parser.builder(options).build();
         HtmlRenderer renderer = HtmlRenderer.builder(options).build();
 
@@ -150,8 +152,8 @@ public class ContentService {
 
         // Handle images without src
         text = text.replaceAll("<img[^>]*>", "[Image]");
-        text
 
+        text = text
             // Remove any remaining HTML tags
             .replaceAll("<[^>]+>", "")
 
@@ -162,8 +164,7 @@ public class ContentService {
             .replaceAll("\\n{3,}", "\n\n")
             .trim();
 
-        // The formatting is already handled in the regex replacements above
-        return text.trim();
+        return text;
     }
 
     private String formatNestedLists(String html) {
