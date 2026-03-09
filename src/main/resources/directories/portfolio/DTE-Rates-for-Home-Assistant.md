@@ -1,6 +1,6 @@
 title: DTE-Rates-for-Home-Assistant
 type: Home Automation
-year: 2025
+year: 2026
 technologies: Python, Home Assistant, HACS, Lovelace, PDF Parsing, Custom Integration
 
 # DTE Rates for Home Assistant
