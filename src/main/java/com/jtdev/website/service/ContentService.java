@@ -90,8 +90,11 @@ public class ContentService {
     private String convertHtmlToAscii(String html, String dir) {
         // First pass: Convert headers with dynamic borders
         html = convertDynamicHeaders(html);
-        
+
         html = formatNestedLists(html);
+
+        // Convert tables before the general regex pass
+        html = convertTablesToAscii(html);
 
         // Convert HTML elements to ASCII formatting
         String text = html
@@ -126,17 +129,7 @@ public class ContentService {
 
             // Bold and italic
             .replaceAll("<strong[^>]*>([^<]*)</strong>", "**$1**")
-            .replaceAll("<em[^>]*>([^<]*)</em>", "*$1*")
-
-            // Tables (simplified ASCII representation)
-            .replaceAll("<table[^>]*>", "\n┌")
-            .replaceAll("</table>", "┘\n")
-            .replaceAll("<tr[^>]*>", "")
-            .replaceAll("</tr>", "\n├")
-            .replaceAll("<th[^>]*>", "─ ")
-            .replaceAll("</th>", " ─")
-            .replaceAll("<td[^>]*>", "│ ")
-            .replaceAll("</td>", " │");
+            .replaceAll("<em[^>]*>([^<]*)</em>", "*$1*");
 
         // Handle images with ASCII art
         Pattern imgPattern = Pattern.compile("<img[^>]*src=\"([^\"]*)\"[^>]*>");
@@ -249,6 +242,90 @@ public class ContentService {
             index++;
             return index;
         }
+    }
+
+    private String convertTablesToAscii(String html) {
+        Pattern tablePattern = Pattern.compile("<table[^>]*>(.*?)</table>", Pattern.DOTALL | Pattern.CASE_INSENSITIVE);
+        Matcher tableMatcher = tablePattern.matcher(html);
+        StringBuffer sb = new StringBuffer();
+        while (tableMatcher.find()) {
+            String asciiTable = renderTableAsAscii(tableMatcher.group(1));
+            tableMatcher.appendReplacement(sb, Matcher.quoteReplacement(asciiTable));
+        }
+        tableMatcher.appendTail(sb);
+        return sb.toString();
+    }
+
+    private String renderTableAsAscii(String tableHtml) {
+        List<List<String>> rows = new ArrayList<>();
+
+        Pattern rowPattern = Pattern.compile("<tr[^>]*>(.*?)</tr>", Pattern.DOTALL | Pattern.CASE_INSENSITIVE);
+        Matcher rowMatcher = rowPattern.matcher(tableHtml);
+        while (rowMatcher.find()) {
+            List<String> cells = new ArrayList<>();
+            Pattern cellPattern = Pattern.compile("<t[hd][^>]*>(.*?)</t[hd]>", Pattern.DOTALL | Pattern.CASE_INSENSITIVE);
+            Matcher cellMatcher = cellPattern.matcher(rowMatcher.group(1));
+            while (cellMatcher.find()) {
+                String cell = cellMatcher.group(1)
+                    .replaceAll("<[^>]+>", "")
+                    .replaceAll("&amp;", "&").replaceAll("&lt;", "<")
+                    .replaceAll("&gt;", ">").replaceAll("&quot;", "\"")
+                    .replaceAll("&#39;", "'").replaceAll("&nbsp;", " ")
+                    .trim();
+                cells.add(cell);
+            }
+            if (!cells.isEmpty()) rows.add(cells);
+        }
+
+        if (rows.isEmpty()) return "";
+
+        int numCols = rows.stream().mapToInt(List::size).max().orElse(0);
+        int[] colWidths = new int[numCols];
+        for (List<String> row : rows) {
+            for (int i = 0; i < row.size(); i++) {
+                colWidths[i] = Math.max(colWidths[i], row.get(i).length());
+            }
+        }
+
+        StringBuilder ascii = new StringBuilder("\n");
+
+        // Top border
+        ascii.append("┌");
+        for (int i = 0; i < numCols; i++) {
+            ascii.append("─".repeat(colWidths[i] + 2));
+            ascii.append(i < numCols - 1 ? "┬" : "┐");
+        }
+        ascii.append("\n");
+
+        for (int r = 0; r < rows.size(); r++) {
+            List<String> row = rows.get(r);
+            ascii.append("│");
+            for (int i = 0; i < numCols; i++) {
+                String cell = i < row.size() ? row.get(i) : "";
+                ascii.append(" ").append(cell).append(" ".repeat(colWidths[i] - cell.length() + 1)).append("│");
+            }
+            ascii.append("\n");
+
+            if (r == 0 && rows.size() > 1) {
+                // Header separator
+                ascii.append("├");
+                for (int i = 0; i < numCols; i++) {
+                    ascii.append("─".repeat(colWidths[i] + 2));
+                    ascii.append(i < numCols - 1 ? "┼" : "┤");
+                }
+                ascii.append("\n");
+            } else if (r == rows.size() - 1) {
+                // Bottom border
+                ascii.append("└");
+                for (int i = 0; i < numCols; i++) {
+                    ascii.append("─".repeat(colWidths[i] + 2));
+                    ascii.append(i < numCols - 1 ? "┴" : "┘");
+                }
+                ascii.append("\n");
+            }
+        }
+
+        return ascii.toString();
     }
 
     private String convertDynamicHeaders(String html) {
