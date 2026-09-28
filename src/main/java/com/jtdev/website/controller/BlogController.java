@@ -5,9 +5,7 @@ import com.jtdev.website.repository.BlogPostRepository;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-
-import java.time.LocalDateTime;
-import java.util.List;
+import reactor.core.scheduler.Schedulers;
 
 @RestController
 @RequestMapping("/api/blog")
@@ -22,37 +20,14 @@ public class BlogController {
 
     @GetMapping
     public Flux<BlogPost> getAllPosts() {
-        return Flux.fromIterable(blogPostRepository.findAll());
+        return Flux.defer(() -> Flux.fromIterable(blogPostRepository.findAll()))
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     @GetMapping("/{id}")
     public Mono<BlogPost> getPostById(@PathVariable Long id) {
-        return Mono.justOrEmpty(blogPostRepository.findById(id));
+        return Mono.defer(() -> Mono.justOrEmpty(blogPostRepository.findById(id)))
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
-    @PostMapping
-    public Mono<BlogPost> createPost(@RequestBody BlogPost blogPost) {
-        blogPost.setCreatedDate(LocalDateTime.now());
-        blogPost.setUpdatedDate(LocalDateTime.now());
-        return Mono.just(blogPostRepository.save(blogPost));
-    }
-
-    @PutMapping("/{id}")
-    public Mono<BlogPost> updatePost(@PathVariable Long id, @RequestBody BlogPost updatedPost) {
-        return Mono.justOrEmpty(blogPostRepository.findById(id))
-                .map(existing -> {
-                    existing.setTitle(updatedPost.getTitle());
-                    existing.setSummary(updatedPost.getSummary());
-                    existing.setContent(updatedPost.getContent());
-                    existing.setTags(updatedPost.getTags());
-                    existing.setUpdatedDate(LocalDateTime.now());
-                    return blogPostRepository.save(existing);
-                });
-    }
-
-    @DeleteMapping("/{id}")
-    public Mono<Void> deletePost(@PathVariable Long id) {
-        blogPostRepository.deleteById(id);
-        return Mono.empty();
-    }
 }

@@ -9,6 +9,8 @@ import com.vladsch.flexmark.util.ast.Node;
 import com.vladsch.flexmark.util.data.MutableDataSet;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
+import org.springframework.core.io.support.ResourcePatternResolver;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.HtmlUtils;
 import org.apache.pdfbox.Loader;
@@ -22,10 +24,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.*;
@@ -33,43 +33,58 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 @Service
 public class ContentService {
 
+    private static final Set<String> PUBLIC_CONTENT_DIRECTORIES = Set.of("blog", "portfolio");
+    private static final Pattern BARE_METADATA_HEADER = Pattern.compile(
+        "\\A((?:(?:title|type|year|technologies|company|published|tags)[ \\t]*:[^\\r\\n]*(?:\\r?\\n|\\r))+)(?:\\r?\\n|\\r)",
+        Pattern.CASE_INSENSITIVE);
+
     private final ResourceLoader resourceLoader;
+    private final ResourcePatternResolver resourcePatternResolver;
     private String resumeTextCache;
     private final Object resumeLock = new Object();
 
     public ContentService(ResourceLoader resourceLoader) {
         this.resourceLoader = resourceLoader;
+        this.resourcePatternResolver = new PathMatchingResourcePatternResolver(resourceLoader);
     }
 
     public List<String> getDirectoryContents(String path) throws IOException {
+        String directory = requirePublicDirectory(path);
         List<String> contents = new ArrayList<>();
 
-        // Use classpath resource to find the directory
-        Resource resource = resourceLoader.getResource("classpath:directories/" + path);
-        if (resource.exists()) {
-            Path dirPath = Paths.get(resource.getURI());
-            try (Stream<Path> paths = Files.walk(dirPath)) {
-                paths.filter(Files::isRegularFile)
-                     .map(p -> p.getFileName().toString())
-                     .forEach(contents::add);
+        Resource[] resources = resourcePatternResolver.getResources(
+                "classpath:directories/" + directory + "/**");
+        for (Resource resource : resources) {
+            if (resource.exists() && !isDirectoryResource(resource) && resource.getFilename() != null) {
+                contents.add(resource.getFilename());
             }
         }
 
+        contents.sort(String::compareTo);
         return contents;
     }
 
     public String getMarkdownContent(String path) throws IOException {
-        Resource resource = resourceLoader.getResource("classpath:directories/" + path);
-        if (!resource.exists()) {
+        requirePublicMarkdownPath(path);
+        int separator = path.indexOf('/');
+        String directory = path.substring(0, separator);
+        String filename = path.substring(separator + 1);
+        Resource resource = Arrays.stream(getMarkdownResources(directory))
+                .filter(candidate -> filename.equals(candidate.getFilename()))
+                .findFirst()
+                .orElse(null);
+        if (resource == null || !resource.exists()) {
             return "File not found: " + path;
         }
 
-        String markdown = new String(resource.getInputStream().readAllBytes());
+        String markdown;
+        try (InputStream inputStream = resource.getInputStream()) {
+            markdown = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
+        }
 
         // Parse markdown and convert to ASCII-friendly format
         MutableDataSet options = new MutableDataSet();
@@ -85,6 +100,30 @@ public class ContentService {
         
         // Convert HTML to ASCII art representation
         return convertHtmlToAscii(html, dir);
+    }
+
+    private String requirePublicDirectory(String path) {
+        if (path == null || !PUBLIC_CONTENT_DIRECTORIES.contains(path)) {
+            throw new IllegalArgumentException("Invalid public content directory");
+        }
+        return path;
+    }
+
+    private void requirePublicMarkdownPath(String path) {
+        if (path == null || path.indexOf('\\') >= 0) {
+            throw new IllegalArgumentException("Invalid public markdown path");
+        }
+
+        int separator = path.indexOf('/');
+        if (separator <= 0 || separator == path.length() - 1 || path.indexOf('/', separator + 1) >= 0
+                || !PUBLIC_CONTENT_DIRECTORIES.contains(path.substring(0, separator))
+                || !path.endsWith(".md")) {
+            throw new IllegalArgumentException("Invalid public markdown path");
+        }
+    }
+
+    private boolean isDirectoryResource(Resource resource) throws IOException {
+        return resource.getURL().getPath().endsWith("/");
     }
 
     private String convertHtmlToAscii(String html, String dir) {
@@ -421,23 +460,32 @@ public class ContentService {
      */
     private Map<String, String> parseFrontmatter(String markdown) {
         Map<String, String> frontmatter = new HashMap<>();
-        
-        if (!markdown.startsWith("---")) {
+
+        if (markdown == null || markdown.isEmpty()) {
             return frontmatter;
         }
-        
-        int endIndex = markdown.indexOf("---", 3);
-        if (endIndex == -1) {
-            return frontmatter;
+
+        String metadata;
+        if (markdown.startsWith("---")) {
+            int endIndex = markdown.indexOf("---", 3);
+            if (endIndex == -1) {
+                return frontmatter;
+            }
+            metadata = markdown.substring(3, endIndex).trim();
+        } else {
+            Matcher bareHeader = BARE_METADATA_HEADER.matcher(markdown);
+            if (!bareHeader.find()) {
+                return frontmatter;
+            }
+            metadata = bareHeader.group(1);
         }
-        
-        String yaml = markdown.substring(3, endIndex).trim();
-        String[] lines = yaml.split("\n");
+
+        String[] lines = metadata.split("\\R");
         
         for (String line : lines) {
             int colonIndex = line.indexOf(":");
             if (colonIndex > 0) {
-                String key = line.substring(0, colonIndex).trim();
+                String key = line.substring(0, colonIndex).trim().toLowerCase(Locale.ROOT);
                 String value = line.substring(colonIndex + 1).trim();
                 frontmatter.put(key, value);
             }
@@ -446,21 +494,30 @@ public class ContentService {
         return frontmatter;
     }
 
+    private Resource[] getMarkdownResources(String directory) throws IOException {
+        String safeDirectory = requirePublicDirectory(directory);
+        Resource[] resources = resourcePatternResolver.getResources(
+                "classpath:directories/" + safeDirectory + "/*.md");
+        Arrays.sort(resources, Comparator.comparing(
+                Resource::getFilename,
+                Comparator.nullsLast(Comparator.naturalOrder())));
+        return resources;
+    }
+
+    private String readUtf8(Resource resource) throws IOException {
+        try (InputStream inputStream = resource.getInputStream()) {
+            return new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
+        }
+    }
+
     /**
      * Extract excerpt from markdown (first paragraph or first 150 chars)
      */
     private String extractExcerpt(String markdown) {
-        // Remove frontmatter
-        String content = markdown;
-        if (content.startsWith("---")) {
-            int endIndex = content.indexOf("---", 3);
-            if (endIndex != -1) {
-                content = content.substring(endIndex + 3);
-            }
-        }
+        String content = stripFrontmatter(markdown);
         
         // Remove markdown headers and formatting
-        content = content.replaceAll("^#+\\s+.*$", "")
+        content = content.replaceAll("(?m)^[ \\t]*#+[ \\t]+.*$", "")
                         .replaceAll("\\*\\*([^*]+)\\*\\*", "$1")
                         .replaceAll("\\*([^*]+)\\*", "$1")
                         .replaceAll("`([^`]+)`", "$1")
@@ -477,72 +534,75 @@ public class ContentService {
         return content.trim();
     }
 
+    private String stripFrontmatter(String markdown) {
+        if (markdown == null || markdown.isEmpty()) {
+            return "";
+        }
+
+        if (markdown.startsWith("---")) {
+            int endIndex = markdown.indexOf("---", 3);
+            if (endIndex != -1) {
+                return markdown.substring(endIndex + 3);
+            }
+            return markdown;
+        }
+
+        Matcher bareHeader = BARE_METADATA_HEADER.matcher(markdown);
+        return bareHeader.find() ? markdown.substring(bareHeader.end()) : markdown;
+    }
+
     /**
      * Get list of blog posts with metadata
      */
     public List<BlogMetadata> getBlogList() throws IOException {
         List<BlogMetadata> blogs = new ArrayList<>();
-        
-        Resource resource = resourceLoader.getResource("classpath:directories/blog");
-        if (!resource.exists()) {
-            return blogs;
-        }
-        
-        Path dirPath = Paths.get(resource.getURI());
-        try (Stream<Path> paths = Files.walk(dirPath, 1)) {
-            List<Path> mdFiles = paths
-                .filter(Files::isRegularFile)
-                .filter(p -> p.getFileName().toString().endsWith(".md"))
-                .collect(Collectors.toList());
-            
-            for (Path file : mdFiles) {
-                try {
-                    String filename = file.getFileName().toString();
-                    String markdown = Files.readString(file);
-                    Map<String, String> frontmatter = parseFrontmatter(markdown);
-                    
-                    String title = frontmatter.getOrDefault("title", 
-                        filename.replace(".md", "").replace("-", " "));
-                    
-                    LocalDate published = null;
-                    String publishedStr = frontmatter.get("published");
-                    if (publishedStr != null) {
-                        try {
-                            published = LocalDate.parse(publishedStr, 
-                                DateTimeFormatter.ofPattern("MMM yyyy", Locale.ENGLISH));
-                        } catch (DateTimeParseException e) {
-                            try {
-                                published = LocalDate.parse(publishedStr);
-                            } catch (DateTimeParseException ignored) {}
-                        }
-                    }
-                    
-                    List<String> tags = new ArrayList<>();
-                    String tagsStr = frontmatter.get("tags");
-                    if (tagsStr != null) {
-                        for (String tag : tagsStr.split(",|\\s+")) {
-                            tag = tag.trim().replace("#", "");
-                            if (!tag.isEmpty()) {
-                                tags.add(tag);
-                            }
-                        }
-                    }
-                    
-                    String excerpt = extractExcerpt(markdown);
-                    
-                    blogs.add(new BlogMetadata(filename, title, published, tags, excerpt));
-                } catch (Exception e) {
-                    System.err.println("Error parsing blog metadata for " + file + ": " + e.getMessage());
+
+        for (Resource file : getMarkdownResources("blog")) {
+            try {
+                String filename = file.getFilename();
+                if (filename == null) {
+                    continue;
                 }
+                String markdown = readUtf8(file);
+                Map<String, String> frontmatter = parseFrontmatter(markdown);
+                    
+                String title = frontmatter.getOrDefault("title",
+                    filename.replace(".md", "").replace("-", " "));
+                    
+                LocalDate published = null;
+                String publishedStr = frontmatter.get("published");
+                if (publishedStr != null) {
+                    try {
+                            published = YearMonth.parse(publishedStr,
+                                DateTimeFormatter.ofPattern("MMM yyyy", Locale.ENGLISH)).atDay(1);
+                    } catch (DateTimeParseException e) {
+                        try {
+                            published = LocalDate.parse(publishedStr);
+                        } catch (DateTimeParseException ignored) {}
+                    }
+                }
+
+                List<String> tags = new ArrayList<>();
+                String tagsStr = frontmatter.get("tags");
+                if (tagsStr != null) {
+                    for (String tag : tagsStr.split(",|\\s+")) {
+                        tag = tag.trim().replace("#", "");
+                        if (!tag.isEmpty()) {
+                            tags.add(tag);
+                        }
+                    }
+                }
+
+                String excerpt = extractExcerpt(markdown);
+                blogs.add(new BlogMetadata(filename, title, published, tags, excerpt));
+            } catch (Exception e) {
+                System.err.println("Error parsing blog metadata for " + file + ": " + e.getMessage());
             }
         }
-        
+
         // Sort by published date (newest first)
-        blogs.sort((a, b) -> {
-            if (a.getPublished() == null) return 1;
-            if (b.getPublished() == null) return -1;
-            return b.getPublished().compareTo(a.getPublished());
-        });
+        blogs.sort(Comparator.comparing(BlogMetadata::getPublished,
+            Comparator.<LocalDate>nullsLast(Comparator.reverseOrder())));
         
         return blogs;
     }
@@ -552,51 +612,40 @@ public class ContentService {
      */
     public List<PortfolioMetadata> getPortfolioList() throws IOException {
         List<PortfolioMetadata> projects = new ArrayList<>();
-        
-        Resource resource = resourceLoader.getResource("classpath:directories/portfolio");
-        if (!resource.exists()) {
-            return projects;
-        }
-        
-        Path dirPath = Paths.get(resource.getURI());
-        try (Stream<Path> paths = Files.walk(dirPath, 1)) {
-            List<Path> mdFiles = paths
-                .filter(Files::isRegularFile)
-                .filter(p -> p.getFileName().toString().endsWith(".md"))
-                .collect(Collectors.toList());
-            
-            for (Path file : mdFiles) {
-                try {
-                    String filename = file.getFileName().toString();
-                    String markdown = Files.readString(file);
-                    Map<String, String> frontmatter = parseFrontmatter(markdown);
+
+        for (Resource file : getMarkdownResources("portfolio")) {
+            try {
+                String filename = file.getFilename();
+                if (filename == null) {
+                    continue;
+                }
+                String markdown = readUtf8(file);
+                Map<String, String> frontmatter = parseFrontmatter(markdown);
                     
-                    String title = frontmatter.getOrDefault("title", 
-                        filename.replace(".md", "").replace("-", " "));
-                    
-                    List<String> technologies = new ArrayList<>();
-                    String techStr = frontmatter.get("technologies");
-                    if (techStr != null) {
-                        for (String tech : techStr.split(",")) {
-                            tech = tech.trim();
-                            if (!tech.isEmpty()) {
-                                technologies.add(tech);
-                            }
+                String title = frontmatter.getOrDefault("title",
+                    filename.replace(".md", "").replace("-", " "));
+
+                List<String> technologies = new ArrayList<>();
+                String techStr = frontmatter.get("technologies");
+                if (techStr != null) {
+                    for (String tech : techStr.split(",")) {
+                        tech = tech.trim();
+                        if (!tech.isEmpty()) {
+                            technologies.add(tech);
                         }
                     }
-                    
-                    String company = frontmatter.getOrDefault("company", "");
-                    String year = frontmatter.getOrDefault("year", "");
-                    String excerpt = extractExcerpt(markdown);
-                    
-                    projects.add(new PortfolioMetadata(filename, title, 
-                        technologies, company, year, excerpt));
-                } catch (Exception e) {
-                    System.err.println("Error parsing portfolio metadata for " + file + ": " + e.getMessage());
                 }
+
+                String company = frontmatter.getOrDefault("company", "");
+                String year = frontmatter.getOrDefault("year", "");
+                String excerpt = extractExcerpt(markdown);
+                projects.add(new PortfolioMetadata(filename, title,
+                    technologies, company, year, excerpt));
+            } catch (Exception e) {
+                System.err.println("Error parsing portfolio metadata for " + file + ": " + e.getMessage());
             }
         }
-        
+
         return projects;
     }
 

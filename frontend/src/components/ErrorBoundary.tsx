@@ -50,17 +50,9 @@ class ErrorBoundary extends Component<Props, State> {
 ║                                                            ║
 ║  An unexpected error occurred in the terminal.             ║
 ║                                                            ║
-║  Error: ${this.state.error?.message || 'Unknown error'}
-║                                                            ║
 ║  Please refresh the page to restart the terminal.          ║
 ║                                                            ║
 ╚════════════════════════════════════════════════════════════╝
-
-Stack Trace:
-${this.state.error?.stack || 'No stack trace available'}
-
-Component Stack:
-${this.state.errorInfo?.componentStack || 'No component stack available'}
 `}
           </pre>
           <button

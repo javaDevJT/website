@@ -1,139 +1,54 @@
-# Joshua Terk Personal Website
+# Joshua Terk's personal website
 
-A modern personal website showcasing impressive UI design with a focus on technology and automotive interests. Built with Spring Boot (backend) and React with TypeScript (frontend), featuring Tailwind CSS and Framer Motion animations.
+A responsive Linux-terminal-themed portfolio for Joshua Terk, Senior Software Engineer. The site presents his work, writing, technology interests, and automotive projects through a custom React terminal backed by Spring Boot APIs.
 
-## Features
+The [maintenance audit](docs/maintenance-audit-2026-09-28.md) records the code review, dependency updates, and verification evidence. Current source navigation and build instructions follow.
 
-- **Home Page**: Animated hero section with tech and automotive themes
-- **About Page**: Personal story and skills
-- **Portfolio Page**: Showcase of UI designs and projects
-- **Blog Page**: Dynamic blog with CMS backend
-- **Contact Page**: Functional contact form with backend processing
-- **Responsive Design**: Works on all devices
-- **Animations**: Smooth transitions using Framer Motion
+## Requirements
 
-## Prerequisites
+- Java 21, with `JAVA_HOME` pointing to that installation.
+- Node.js 24 LTS and npm; `.nvmrc` selects the supported Node major.
+- The checked-in Maven wrapper downloads the project's Maven distribution.
 
-- Java 25 or later
-- Maven 3.6+ (Maven Wrapper included)
-- Node.js 18+ and npm (for frontend build)
+## Build and test
 
-## Getting Started
+From the repository root:
 
-### 1. Clone the Repository
-```bash
-git clone <repository-url>
-cd website
-```
-
-### 2. Backend Setup
-The backend uses Spring Boot with JPA and H2 database.
-
-- Run Maven to build and install dependencies:
-```bash
-./mvnw clean install
-```
-
-### 3. Frontend Setup
-The frontend is built with React, TypeScript, and Tailwind CSS.
-
-- Navigate to the frontend directory:
-```bash
-cd frontend
-```
-
-- Install dependencies:
-```bash
-npm install
-```
-
-- Build the frontend (this will output to `../src/main/resources/static`):
-```bash
-npm run build
-```
-
-- Return to root:
-```bash
-cd ..
-```
-
-### 4. Run the Application
-Start the Spring Boot application, which serves both backend APIs and the built frontend:
-
-```bash
-./mvnw spring-boot:run
-```
-
-The application will start on http://localhost:8080.
-
-### 5. Access the Website
-Open your browser and go to:
-- **Website**: http://localhost:8080
-- **API Endpoints**:
-  - Blog posts: http://localhost:8080/api/blog
-  - Contact form: http://localhost:8080/api/contact
-
-## Development
-
-### Running Frontend in Development Mode
-For frontend development with hot reload:
-
-```bash
-cd frontend
-npm run dev
-```
-
-This starts the Vite dev server on http://localhost:3000. Note: CORS is configured for development.
-
-### Database
-- Uses H2 in-memory database for development.
-- Data persists only during runtime; restart clears data.
-
-### Building for Production
-To build the complete application:
-
-```bash
-./mvnw clean package
-```
-
-This creates a JAR file in `target/` that can be run with:
-```bash
+```sh
+./mvnw test
+./mvnw package
 java -jar target/website-0.0.1-SNAPSHOT.jar
 ```
 
-## Project Structure
+The Maven lifecycle installs frontend dependencies from the lockfile, typechecks TypeScript, builds the frontend, and packages the UI with the backend. The default local server listens on port 8080. `./mvnw spring-boot:run` is also available for backend development.
 
-```
-website/
-├── src/main/java/com/jtdev/website/
-│   ├── controller/     # REST controllers (Blog, Contact)
-│   ├── model/          # JPA entities (BlogPost, ContactMessage)
-│   ├── repository/     # JPA repositories
-│   └── WebsiteApplication.java
-├── src/main/resources/static/  # Built frontend assets
-├── frontend/           # React frontend source
-│   ├── src/
-│   │   ├── pages/      # React components (Home, About, etc.)
-│   │   └── App.tsx
-│   └── package.json
-├── pom.xml             # Maven configuration
-└── README.md
+For frontend development, keep the backend running and use a second terminal:
+
+```sh
+cd frontend
+npm ci
+npm run dev
 ```
 
-## Technologies Used
+Vite serves the development UI on port 3000. `npm run build` runs TypeScript checking and creates production assets; `npm run preview` previews that build. Use the packaged Spring Boot application when verifying backend-dependent terminal commands.
 
-- **Backend**: Spring Boot, Spring Data JPA, H2 Database, Spring WebFlux
-- **Frontend**: React, TypeScript, Tailwind CSS, Framer Motion, Axios
-- **Build Tools**: Maven, Vite
+## Current application
+
+- [App.tsx](frontend/src/App.tsx) renders the boot sequence and [CustomTerminalEnhanced.tsx](frontend/src/components/CustomTerminalEnhanced.tsx).
+- Content such as `about`, `portfolio`, `blog`, and `resume` comes from [classpath resources](src/main/resources/directories) and the [content API](src/main/java/com/jtdev/website/controller/ContentController.java).
+- Contact information is returned by `GET /api/contact`. The current site uses contact links; it does not submit or persist a contact form.
+- `/api/blog` exposes read-only access to the legacy JPA-backed blog. The terminal's Markdown blog and portfolio use `/api/content/**` instead.
+- The H2 database is ephemeral by default. Resource-backed articles and portfolio entries are checked-in files, independent of that database.
+- `/actuator/health` reports application health. The terminal's server-information commands are deliberately public display features.
+
+## CI and containers
+
+[CI](.github/workflows/ci.yml) and [deployment configuration](.github/workflows/deploy.yml) contain the automated build and image-publication rules. See the [maintenance audit](docs/maintenance-audit-2026-09-28.md) for the private-runner contract, validation evidence, and activation boundaries.
+
+The [Dockerfile](Dockerfile) builds the frontend and Spring Boot application. Container and reverse-proxy settings live under [infrastructure](infrastructure/). Verify the locally installed Docker or Podman Compose provider before running its commands.
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests and ensure builds pass
-5. Submit a pull request
+Preserve the accessible terminal navigation and existing content. Run the relevant checks before submitting changes. New catalogue entries require owner selection.
 
-## License
-
-This project is licensed under the MIT License.
+The historical session notes describe earlier designs and are not a current feature checklist or proof of deployment.

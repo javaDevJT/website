@@ -14,6 +14,7 @@ LinkedIn: ${CONTACT_LINKEDIN}`;
 
 const BANNER_WIDTH_CH = '╔════════════════════════════════════════════════════════════════════════════════════════════╗'.length;
 const ICON_ROW_WIDTH_CH = BANNER_WIDTH_CH - 2;
+const HOME_PATH = '/home/visitor';
 
 interface CommandOutput {
   command: string;
@@ -36,7 +37,7 @@ const CustomTerminalEnhanced: React.FC<CustomTerminalEnhancedProps> = ({
   onToggleScanLines, 
   scanLinesEnabled = true 
 }) => {
-  const [currentPath, setCurrentPath] = useState('/home/visitor');
+  const [currentPath, setCurrentPath] = useState(HOME_PATH);
   const [command, setCommand] = useState('');
   const [history, setHistory] = useState<CommandOutput[]>([]);
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
@@ -55,7 +56,7 @@ const CustomTerminalEnhanced: React.FC<CustomTerminalEnhancedProps> = ({
 
   // File system structure - will be loaded dynamically
   const [fileSystem, setFileSystem] = useState<any>({
-    '/home/visitor': {
+    [HOME_PATH]: {
       type: 'directory',
       contents: {
         'portfolio': { type: 'directory', contents: {} },
@@ -206,7 +207,8 @@ User Agent: ${navigator.userAgent}`,
 ║              Excellence Through Innovation                 ║
 ╠════════════════════════════════════════════════════════════╣
 ║                                                            ║
-║  Current Role: SRE Team Lead                               ║
+║  Current Role: Senior Software Engineer                    ║
+║  Function: SRE Team Lead                                    ║
 ║  Division: In-Vehicle Product Cybersecurity                ║
 ║                                                            ║
 ║  Working on:                                               ║
@@ -550,37 +552,40 @@ Try some commands you might not expect to work. 😉`;
     },
 
     cd: (directory: string) => {
-      let newPath = currentPath;
+      const requestedPath = !directory || directory === '~'
+        ? HOME_PATH
+        : directory.startsWith('~/')
+          ? `${HOME_PATH}/${directory.slice(2)}`
+          : directory.startsWith('/')
+            ? directory
+            : `${currentPath}/${directory}`;
+      const pathParts: string[] = [];
 
-      if (directory === '..') {
-        const pathParts = currentPath.split('/').filter(p => p);
-        if (pathParts.length > 2) {
-          pathParts.pop();
-          newPath = '/' + pathParts.join('/');
-        }
-      } else if (directory === '~' || directory === '') {
-        newPath = `/home/${clientInfo?.username || 'visitor'}`;
-      } else if (directory.startsWith('/')) {
-        newPath = directory;
-      } else {
-        if (currentPath === `/home/${clientInfo?.username || 'visitor'}`) {
-          newPath = `${currentPath}/${directory}`;
+      for (const segment of requestedPath.split('/').filter(Boolean)) {
+        if (segment === '.') continue;
+        if (segment === '..') {
+          if (pathParts.length > 2) pathParts.pop();
         } else {
-          return `cd: ${directory}: No such directory`;
+          pathParts.push(segment);
         }
       }
 
-      const currentDir = getCurrentDirectory();
-      if (currentDir && currentDir.contents && currentDir.contents[directory] &&
-          currentDir.contents[directory].type === 'directory') {
-        setCurrentPath(newPath);
-        return `Changed directory to ${newPath}`;
-      } else if (newPath !== currentPath) {
-        setCurrentPath(newPath);
-        return `Changed directory to ${newPath}`;
-      } else {
+      const newPath = `/${pathParts.join('/')}`;
+      if (newPath !== HOME_PATH && !newPath.startsWith(`${HOME_PATH}/`)) {
         return `cd: ${directory}: No such directory`;
       }
+
+      let target = fileSystem[HOME_PATH];
+      for (const segment of pathParts.slice(2)) {
+        const entry = target?.contents?.[segment];
+        if (!entry || entry.type !== 'directory') {
+          return `cd: ${directory}: No such directory`;
+        }
+        target = entry;
+      }
+
+      setCurrentPath(newPath);
+      return `Changed directory to ${newPath}`;
     },
 
     ls: () => {
@@ -660,7 +665,7 @@ Try some commands you might not expect to work. 😉`;
         return `About Joshua Terk:
 
 I am a passionate backend engineer with expertise in building scalable, high-performance systems.
-I currently work as the leader of an SRE team at General Motors, servicing in-vehicle cryptographic applications
+I am a Senior Software Engineer at General Motors and lead an SRE team responsible for in-vehicle cryptographic applications
 vital to the day-to-day operation of our manufacturing plants and vehicles.
 
 Key Expertise:
@@ -699,7 +704,7 @@ Let's build something amazing.`;
 ║  ╚█████╔╝╚██████╔╝███████║██║  ██║╚██████╔╝██║  ██║       ██║   ███████╗██║  ██║██║  ██╗   ║
 ║   ╚════╝  ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝       ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝   ║
 ║                                                                                            ║
-║              Backend Engineer & In-Vehicle Product Cybersecurity SRE Team Lead             ║
+║         Senior Software Engineer & In-Vehicle Product Cybersecurity SRE Team Lead          ║
 ║                                       General Motors                                       ║
 ║                                                                                            ║
 ╚════════════════════════════════════════════════════════════════════════════════════════════╝
@@ -726,11 +731,15 @@ Let's build something amazing.`;
 
   const getCurrentDirectory = () => {
     const pathParts = currentPath.split('/').filter(p => p);
-    let current = fileSystem['/home/visitor'];
+    if (pathParts[0] !== 'home' || pathParts[1] !== 'visitor') {
+      return null;
+    }
 
-    for (let i = 2; i < pathParts.length; i++) {
-      if (current && current.contents && current.contents[pathParts[i]]) {
-        current = current.contents[pathParts[i]];
+    let current = fileSystem[HOME_PATH];
+
+    for (const segment of pathParts.slice(2)) {
+      if (current?.contents?.[segment]?.type === 'directory') {
+        current = current.contents[segment];
       } else {
         return null;
       }
@@ -808,7 +817,7 @@ Let's build something amazing.`;
     }
 
     try {
-      const response = await axios.get(`/api/content/file?path=${contentPath}`);
+      const response = await axios.get('/api/content/file', { params: { path: contentPath } });
       return response.data.content || 'Content not available';
     } catch (error: any) {
       console.error('Error loading content:', error);
@@ -857,10 +866,10 @@ Let's build something amazing.`;
               commandKey === 'resume' || commandKey === 'cv') {
             output = await cmdFunc(args.join(' '));
           } else if (commandKey === 'cd') {
-            output = cmdFunc(args[0] || '');
+            output = cmdFunc(args.join(' ').trim());
             outputType = 'success';
           } else if (commandKey === 'cat') {
-            output = await cmdFunc(args[0] || '');
+            output = await cmdFunc(args.join(' ').trim());
           } else {
             output = await cmdFunc();
           }
@@ -999,7 +1008,7 @@ Let's build something amazing.`;
 
   // Format path for display: /home/visitor -> ~, /home/visitor/portfolio -> ~/portfolio
   const getDisplayPath = (path: string) => {
-    const homePath = `/home/${clientInfo?.username || 'visitor'}`;
+    const homePath = HOME_PATH;
     if (path === homePath) {
       return '~';
     } else if (path.startsWith(homePath + '/')) {
@@ -1046,7 +1055,28 @@ Let's build something amazing.`;
           lineHeight: '1.4'
         }}
       >
+        <div className="terminal-mobile-header">
+          <h1>Joshua Terk</h1>
+          <p>Senior Software Engineer</p>
+          <p>In-Vehicle Product Cybersecurity · SRE Team Lead</p>
+          <p>General Motors</p>
+          <nav className="terminal-social-links" aria-label="Contact and social links">
+            {[
+              { href: `mailto:${CONTACT_EMAIL}`, label: 'Email', image: '/email.png' },
+              { href: CONTACT_LINKEDIN, label: 'LinkedIn', image: '/linkedin.png' },
+              { href: 'https://github.com/javadevjt', label: 'GitHub', image: '/github.png' },
+              { href: 'https://x.com/realJoshuaTerk', label: 'X/Twitter', image: '/x.png' },
+            ].map(link => (
+              <a key={link.label} href={link.href} aria-label={link.label} target="_blank" rel="noopener noreferrer">
+                <img src={link.image} alt="" style={{ filter: (link.label === 'GitHub' || link.label === 'X/Twitter') && currentTheme !== 'light' ? 'invert(1)' : 'none' }} />
+              </a>
+            ))}
+          </nav>
+          <p>Welcome to Joshua Terk's Terminal Portfolio</p>
+          <p>Type 'help' to see available commands.</p>
+        </div>
         <div
+          className="terminal-desktop-header"
           style={{
             display: 'flex',
             justifyContent: 'center'
@@ -1068,7 +1098,7 @@ Let's build something amazing.`;
 ║  ╚█████╔╝╚██████╔╝███████║██║  ██║╚██████╔╝██║  ██║       ██║   ███████╗██║  ██║██║  ██╗   ║
 ║   ╚════╝  ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝       ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝   ║
 ║                                                                                            ║
-║              Backend Engineer & In-Vehicle Product Cybersecurity SRE Team Lead             ║
+║         Senior Software Engineer & In-Vehicle Product Cybersecurity SRE Team Lead          ║
 ║                                       General Motors                                       ║
 ║                                                                                            ║
 ║                                                                                            ║
@@ -1168,7 +1198,7 @@ ${turboMode ? '⚡ TURBO MODE ENABLED ⚡' : ''}
             </div>
           </div>
         ))}
-        <div style={{ display: 'flex', alignItems: 'center' }}>
+        <div className="terminal-input-row" style={{ display: 'flex', alignItems: 'center' }}>
           <span 
             id="terminal-prompt"
             style={{ color: theme.prompt, marginRight: '10px' }}
@@ -1191,6 +1221,7 @@ ${turboMode ? '⚡ TURBO MODE ENABLED ⚡' : ''}
               fontFamily: 'inherit',
               fontSize: 'inherit',
               outline: 'none',
+              minWidth: 0,
               flex: 1
             }}
             autoFocus

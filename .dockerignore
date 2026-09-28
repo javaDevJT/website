@@ -33,9 +33,11 @@ logs
 .env.local
 .env.*.local
 
-# Documentation (not needed in image)
+# Repository documentation is excluded, but application Markdown resources
+# are served by the website and must remain in the build context.
 *.md
 !README.md
+!src/main/resources/**/*.md
 
 # Test files
 **/*.test.*

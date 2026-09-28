@@ -151,7 +151,7 @@ const CustomTerminalNew: React.FC = () => {
         return `About Joshua Terk:
 
 I am a passionate backend engineer with expertise in building scalable, high-performance systems.
-I currently work as the leader of an SRE team at General Motors, servicing in-vehicle cryptographic applicatiions
+I am a Senior Software Engineer at General Motors and lead an SRE team responsible for in-vehicle cryptographic applications
 vital to the day-to-day operation of our manufacturing plants and vehicles.
 
 Key Expertise:
@@ -189,7 +189,7 @@ system architecture, and scalable application development.`;
 ║  ╚█████╔╝╚██████╔╝███████║██║  ██║╚██████╔╝██║  ██║       ██║   ███████╗██║  ██║██║  ██╗   ║
 ║   ╚════╝  ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝       ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝   ║
 ║                                                                                            ║
-║              Backend Engineer & In-Vehicle Product Cybersecurity SRE Team Lead             ║
+║         Senior Software Engineer & In-Vehicle Product Cybersecurity SRE Team Lead          ║
 ║                                       General Motors                                       ║
 ║                                                                                            ║
 ╚════════════════════════════════════════════════════════════════════════════════════════════╝
@@ -480,7 +480,7 @@ const welcomeMessage = `
 ║  ╚█████╔╝╚██████╔╝███████║██║  ██║╚██████╔╝██║  ██║       ██║   ███████╗██║  ██║██║  ██╗   ║
 ║   ╚════╝  ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝       ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝   ║
 ║                                                                                            ║
-║              Backend Engineer & In-Vehicle Product Cybersecurity SRE Team Lead             ║
+║         Senior Software Engineer & In-Vehicle Product Cybersecurity SRE Team Lead          ║
 ║                                       General Motors                                       ║
 ║                                                                                            ║
 ╚════════════════════════════════════════════════════════════════════════════════════════════╝

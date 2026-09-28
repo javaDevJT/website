@@ -11,10 +11,11 @@
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "noEmit": true,
-    "jsx": "react-jsx",
+ "noEmit": true,
+ "jsx": "react-jsx",
+ "types": ["vite/client"],
 
-    /* Linting */
+ /* Linting */
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,

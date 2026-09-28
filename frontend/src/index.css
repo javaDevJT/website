@@ -1,8 +1,8 @@
 @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600;700&display=swap');
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss" source(none);
+@source "../index.html";
+@source "./";
 
 body {
   margin: 0;
@@ -10,4 +10,66 @@ body {
   font-family: 'Fira Code', monospace;
   background-color: #000;
   color: #00ff00;
+}
+
+.terminal-mobile-header {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .terminal-desktop-header {
+    display: none !important;
+  }
+
+  .terminal-mobile-header {
+    display: block;
+    border: 1px solid currentColor;
+    padding: 20px 12px;
+    margin-bottom: 24px;
+    white-space: normal;
+    text-align: center;
+  }
+
+  .terminal-mobile-header h1 {
+    font-size: 24px;
+    font-weight: 700;
+    margin-bottom: 12px;
+  }
+
+  .terminal-mobile-header p {
+    margin: 8px 0;
+  }
+
+  .terminal-social-links {
+    display: flex;
+    justify-content: center;
+    margin: 16px 0;
+  }
+
+  .terminal-social-links a {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+  }
+
+  .terminal-social-links img {
+    width: 20px;
+    height: 20px;
+  }
+
+  .terminal-input-row {
+    flex-wrap: wrap;
+  }
+
+  .terminal-input-row span {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .terminal-input-row input {
+    flex-basis: 100% !important;
+    min-height: 44px;
+  }
 }

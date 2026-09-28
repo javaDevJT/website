@@ -10,9 +10,11 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.io.IOException;
-import java.util.HashMap;
+import java.util.concurrent.Callable;
 import java.util.List;
 import java.util.Map;
 
@@ -29,92 +31,67 @@ public class ContentController {
 
     @GetMapping("/directory/{path}")
     public Mono<Map<String, Object>> getDirectoryContents(@PathVariable String path) {
-        try {
+        return this.<Map<String, Object>>blocking(() -> {
             List<String> contents = contentService.getDirectoryContents(path);
-            Map<String, Object> result = new HashMap<>();
-            result.put("path", path);
-            result.put("contents", contents);
-            return Mono.just(result);
-        } catch (IOException e) {
-            Map<String, Object> error = new HashMap<>();
-            error.put("error", "Failed to read directory: " + e.getMessage());
-            return Mono.just(error);
-        }
+            return Map.of("path", path, "contents", contents);
+        }).onErrorMap(IllegalArgumentException.class,
+                e -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid public content path"))
+          .onErrorResume(IOException.class,
+                e -> Mono.<Map<String, Object>>just(Map.of("error", "Failed to read directory.")));
     }
 
     @GetMapping("/file")
     public Mono<Map<String, Object>> getFileContent(@RequestParam String path) {
-        try {
+        return this.<Map<String, Object>>blocking(() -> {
             String content = contentService.getMarkdownContent(path);
-            Map<String, Object> result = new HashMap<>();
-            result.put("path", path);
-            result.put("content", content);
-            return Mono.just(result);
-        } catch (IOException e) {
-            Map<String, Object> error = new HashMap<>();
-            error.put("error", "Failed to read file: " + e.getMessage());
-            return Mono.just(error);
-        }
+            return Map.of("path", path, "content", content);
+        }).onErrorMap(IllegalArgumentException.class,
+                e -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid public content path"))
+          .onErrorResume(IOException.class,
+                e -> Mono.<Map<String, Object>>just(Map.of("error", "Failed to read public file.")));
     }
 
     @GetMapping("/blog/list")
     public Mono<List<BlogMetadata>> getBlogList() {
-        try {
-            return Mono.just(contentService.getBlogList());
-        } catch (IOException e) {
-            return Mono.just(List.of());
-        }
+        return blocking(contentService::getBlogList)
+                .onErrorResume(IOException.class, e -> Mono.just(List.of()));
     }
 
     @GetMapping("/blog/search")
     public Mono<List<BlogMetadata>> searchBlogs(@RequestParam(required = false) String term) {
-        try {
-            return Mono.just(contentService.searchBlogs(term));
-        } catch (IOException e) {
-            return Mono.just(List.of());
-        }
+        return blocking(() -> contentService.searchBlogs(term))
+                .onErrorResume(IOException.class, e -> Mono.just(List.of()));
     }
 
     @GetMapping("/portfolio/list")
     public Mono<List<PortfolioMetadata>> getPortfolioList() {
-        try {
-            return Mono.just(contentService.getPortfolioList());
-        } catch (IOException e) {
-            return Mono.just(List.of());
-        }
+        return blocking(contentService::getPortfolioList)
+                .onErrorResume(IOException.class, e -> Mono.just(List.of()));
     }
 
     @GetMapping("/portfolio/filter")
     public Mono<List<PortfolioMetadata>> filterPortfolio(@RequestParam(required = false) String tech) {
-        try {
-            return Mono.just(contentService.filterPortfolioByTech(tech));
-        } catch (IOException e) {
-            return Mono.just(List.of());
-        }
+        return blocking(() -> contentService.filterPortfolioByTech(tech))
+                .onErrorResume(IOException.class, e -> Mono.just(List.of()));
     }
 
     @GetMapping("/resume")
     public Mono<Map<String, Object>> getResume() {
-        return Mono.fromCallable(() -> {
+        return this.<Map<String, Object>>blocking(() -> {
             String resumeText = contentService.getResumeText();
-            Map<String, Object> result = new HashMap<>();
-            result.put("text", resumeText);
-            result.put("downloadUrl", "/api/content/resume/download");
-            return result;
+            return Map.of("text", resumeText, "downloadUrl", "/api/content/resume/download");
         }).onErrorResume(e -> {
-            Map<String, Object> error = new HashMap<>();
-            error.put("error", "Failed to load resume: " + e.getMessage());
-            return Mono.just(error);
+            return Mono.<Map<String, Object>>just(Map.of("error", "Failed to load resume."));
         });
     }
 
     @GetMapping("/resume/download")
     public Mono<ResponseEntity<Resource>> downloadResume() {
-        return Mono.fromCallable(() -> {
+        return this.<ResponseEntity<Resource>>blocking(() -> {
             try {
                 Resource pdf = contentService.getResumePdfResource();
                 if (!pdf.exists()) {
-                    return ResponseEntity.notFound().build();
+                    return ResponseEntity.<Resource>notFound().build();
                 }
 
                 HttpHeaders headers = new HttpHeaders();
@@ -125,8 +102,12 @@ public class ContentController {
                         .contentType(MediaType.APPLICATION_PDF)
                         .body(pdf);
             } catch (Exception e) {
-                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+                return ResponseEntity.<Resource>status(HttpStatus.INTERNAL_SERVER_ERROR).build();
             }
         });
+    }
+
+    private <T> Mono<T> blocking(Callable<T> action) {
+        return Mono.fromCallable(action).subscribeOn(Schedulers.boundedElastic());
     }
 }

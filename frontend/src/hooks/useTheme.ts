@@ -69,12 +69,21 @@ export const themes: Record<string, Theme> = {
 
 export const useTheme = () => {
   const [currentTheme, setCurrentTheme] = useState<string>(() => {
-    const saved = localStorage.getItem('terminal-theme');
+    let saved: string | null = null;
+    try {
+      saved = window.localStorage.getItem('terminal-theme');
+    } catch {
+      // Use the default theme when browser storage is unavailable.
+    }
     return saved || 'classic';
   });
 
   useEffect(() => {
-    localStorage.setItem('terminal-theme', currentTheme);
+    try {
+      window.localStorage.setItem('terminal-theme', currentTheme);
+    } catch {
+      // Theme changes still work for the current page session.
+    }
   }, [currentTheme]);
 
   const changeTheme = (themeName: string) => {

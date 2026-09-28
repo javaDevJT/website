@@ -4,16 +4,34 @@ import BootSequence from './components/BootSequence';
 import CustomTerminalEnhanced from './components/CustomTerminalEnhanced';
 import ScanLines from './components/ScanLines';
 
+const readStorage = (kind: 'local' | 'session', key: string): string | null => {
+  try {
+    const storage = kind === 'local' ? window.localStorage : window.sessionStorage;
+    return storage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+const writeStorage = (kind: 'local' | 'session', key: string, value: string): void => {
+  try {
+    const storage = kind === 'local' ? window.localStorage : window.sessionStorage;
+    storage.setItem(key, value);
+  } catch {
+    // The terminal remains usable when browser storage is unavailable.
+  }
+};
+
 function App() {
   const [showBoot, setShowBoot] = useState(() => {
     // Only show boot sequence once per session
-    const hasBooted = sessionStorage.getItem('hasBooted');
+    const hasBooted = readStorage('session', 'hasBooted');
     return !hasBooted;
   });
 
   const [scanLinesEnabled, setScanLinesEnabled] = useState(() => {
     // Load scan lines preference from localStorage
-    const saved = localStorage.getItem('scanlines-enabled');
+    const saved = readStorage('local', 'scanlines-enabled');
     if (saved === null) {
       return true;
     }
@@ -21,7 +39,7 @@ function App() {
   });
 
   const handleBootComplete = () => {
-    sessionStorage.setItem('hasBooted', 'true');
+    writeStorage('session', 'hasBooted', 'true');
     setShowBoot(false);
   };
 
@@ -39,7 +57,7 @@ function App() {
 
   // Update scan lines preference
   useEffect(() => {
-    localStorage.setItem('scanlines-enabled', scanLinesEnabled.toString());
+    writeStorage('local', 'scanlines-enabled', scanLinesEnabled.toString());
   }, [scanLinesEnabled]);
 
   if (showBoot) {
