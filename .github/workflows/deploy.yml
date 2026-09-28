@@ -60,6 +60,6 @@ jobs:
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        cache-from: type=gha,version=2,scope=truenas-15ed4a3293d99fba
+        cache-to: type=gha,version=2,mode=max,scope=truenas-15ed4a3293d99fba
         platforms: linux/amd64
