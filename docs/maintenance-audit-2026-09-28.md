@@ -2,6 +2,12 @@
 
 This records the pre-release audit and local verification. The owner subsequently authorized adding Discord Option Tailer and Embedify, publishing the changes, and deploying the resulting image; release execution is tracked separately.
 
+## Release hardening follow-up
+
+After Adoptium's version-discovery API timed out during CI, Java compilation and tests were moved into the pinned Docker builder. The current source uses Java 25 LTS, Node 26.10.0, Spring Boot 4.1.1, Exec Maven Plugin 3.6.4, and React Router 8.4.0. Java 27 is outside stable Spring Boot's documented compatibility range; Java 25 is the maintained LTS choice within that range.
+
+The multi-stage image now derives its Java modules with `jdeps` and creates a reduced runtime with `jlink`. The final Alpine image runs as UID/GID 1001 and contains the linked runtime and application JAR, without the Node/Maven build tools. CI exercises the linked runtime, PDF text extraction, selected catalogue entries and generated assets, then scans runtime OS packages and Java libraries with Trivy. Frontend dependencies have a separate npm audit gate. These gates fail on known findings and do not claim to eliminate every possible vulnerability. The detailed baseline audit and its earlier local results follow.
+
 ## Scope and acceptance
 
 Review all maintained backend, frontend, content, build, and deployment sources; update dependencies using verified stable releases; make the existing GitHub Actions build compatible with the user's private runner; report projects missing from the catalogue without adding them; update current job-title references to Senior Software Engineer while retaining job function.

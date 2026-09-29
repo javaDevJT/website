@@ -11,40 +11,6 @@ permissions:
   contents: read
 
 jobs:
-  backend-test:
-    name: Backend Tests
-    runs-on: truenas-website
-    timeout-minutes: 30
-
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        with:
-          java-version: '21'
-          distribution: temurin
-          cache: maven
-
-      - name: Set up Node.js 24
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Run Backend Tests
-        run: ./mvnw --batch-mode test
-
-      - name: Upload Test Results
-        if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
-        with:
-          name: backend-test-results
-          path: target/surefire-reports/
-          if-no-files-found: ignore
-          retention-days: 7
-
   frontend-build:
     name: Frontend Build
     runs-on: truenas-website
@@ -53,16 +19,20 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - name: Set up Node.js 24
+      - name: Set up Node.js 26.10.0
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          node-version: '24'
+          node-version: '26.10.0'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install Dependencies
         working-directory: ./frontend
         run: npm ci
+
+      - name: Audit Frontend Dependencies
+        working-directory: ./frontend
+        run: npm audit --audit-level=low
 
       - name: Build Frontend
         working-directory: ./frontend
@@ -77,9 +47,9 @@ jobs:
           retention-days: 7
 
   docker-build:
-    name: Docker Build
+    name: Backend Tests, Runtime Smoke and Vulnerability Scan
     runs-on: truenas-website
-    needs: [backend-test, frontend-build]
+    needs: [frontend-build]
     timeout-minutes: 40
 
     steps:
@@ -95,14 +65,14 @@ jobs:
             cert=/run/buildkit/tls/client.pem
             key=/run/buildkit/tls/client.key
 
-      - name: Build and Smoke Test Runtime Image
+      - name: Test Backend, Verify Linked Runtime and Scan Vulnerabilities
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ./Dockerfile
-          target: smoke-test
+          target: security-scan
           platforms: linux/amd64
           push: false
           cache-from: type=gha,version=2,scope=truenas-15ed4a3293d99fba
           cache-to: type=gha,version=2,mode=max,scope=truenas-15ed4a3293d99fba
-          no-cache-filters: smoke-test
+          no-cache-filters: smoke-test,security-scan

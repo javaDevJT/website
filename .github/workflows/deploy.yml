@@ -79,6 +79,7 @@ jobs:
           context: .
           file: ./Dockerfile
           target: runtime
+          no-cache-filters: smoke-test,security-scan
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

@@ -6,8 +6,8 @@ The [maintenance audit](docs/maintenance-audit-2026-09-28.md) records the code r
 
 ## Requirements
 
-- Java 21, with `JAVA_HOME` pointing to that installation.
-- Node.js 24 LTS and npm; `.nvmrc` selects the supported Node major.
+- Java 25, with `JAVA_HOME` pointing to that installation.
+- Node.js 26.10.0 and npm; `.nvmrc` selects the supported version.
 - The checked-in Maven wrapper downloads the project's Maven distribution.
 
 ## Build and test
@@ -45,7 +45,9 @@ Vite serves the development UI on port 3000. `npm run build` runs TypeScript che
 
 [CI](.github/workflows/ci.yml) and [deployment configuration](.github/workflows/deploy.yml) contain the automated build and image-publication rules. See the [maintenance audit](docs/maintenance-audit-2026-09-28.md) for the private-runner contract, validation evidence, and activation boundaries.
 
-The [Dockerfile](Dockerfile) builds the frontend and Spring Boot application. Container and reverse-proxy settings live under [infrastructure](infrastructure/). Verify the locally installed Docker or Podman Compose provider before running its commands.
+The [Dockerfile](Dockerfile) tests and builds with Java 25 and Node 26, then uses `jdeps` and `jlink` to create the Java runtime. The final Alpine image contains the application and linked runtime, runs as UID/GID 1001, and excludes Maven, Node, Java compiler tools, and source resources outside the JAR. CI boots that image, exercises PDF/content/UI routes, and scans its filesystem with Trivy before image publication. Any reported OS or Java-library vulnerability fails the scan; the scan uses current advisory data rather than guaranteeing future vulnerability absence.
+
+Container and reverse-proxy settings live under [infrastructure](infrastructure/). Verify the locally installed Docker or Podman Compose provider before running its commands.
 
 ## Contributing
 
