@@ -3,7 +3,7 @@
 FROM node:26.10.0-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80 AS node-toolchain
 
 FROM eclipse-temurin:25.0.4.1_1-jdk-alpine-3.24@sha256:3fd2d245c4e0eba615fe366a71b8bd25f5db7104f53e4026b24bf508b880bd2a AS backend-build
-RUN apk add --no-cache libstdc++
+RUN apk add --no-cache libstdc++ libatomic
 COPY --from=node-toolchain /usr/local/ /usr/local/
 WORKDIR /app
 COPY pom.xml mvnw ./
@@ -12,7 +12,8 @@ COPY frontend ./frontend
 COPY src ./src
 
 # Run the same backend tests and frontend checks used for local verification.
-RUN ./mvnw --batch-mode --no-transfer-progress clean verify
+RUN ./mvnw --batch-mode --no-transfer-progress clean verify && \
+    cd frontend && npm audit --audit-level=low
 
 FROM backend-build AS java-runtime
 # jdeps finds static JDK dependencies. Reflection, charset and service-provider

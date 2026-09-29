@@ -11,45 +11,9 @@ permissions:
   contents: read
 
 jobs:
-  frontend-build:
-    name: Frontend Build
-    runs-on: truenas-website
-    timeout-minutes: 20
-
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-
-      - name: Set up Node.js 26.10.0
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: '26.10.0'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install Dependencies
-        working-directory: ./frontend
-        run: npm ci
-
-      - name: Audit Frontend Dependencies
-        working-directory: ./frontend
-        run: npm audit --audit-level=low
-
-      - name: Build Frontend
-        working-directory: ./frontend
-        run: npm run build
-
-      - name: Upload Build Artifacts
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
-        with:
-          name: frontend-build
-          path: target/generated-resources/static/
-          if-no-files-found: error
-          retention-days: 7
-
   docker-build:
-    name: Backend Tests, Runtime Smoke and Vulnerability Scan
+    name: Build, Test and Scan
     runs-on: truenas-website
-    needs: [frontend-build]
     timeout-minutes: 40
 
     steps:
