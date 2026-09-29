@@ -39,11 +39,6 @@ logs
 !README.md
 !src/main/resources/**/*.md
 
-# Test files
-**/*.test.*
-**/__tests__
-**/test
-
 # CI/CD
 .github
 .gitlab-ci.yml

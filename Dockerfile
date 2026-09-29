@@ -12,7 +12,7 @@ COPY frontend ./frontend
 COPY src ./src
 
 # Run the same backend tests and frontend checks used for local verification.
-RUN ./mvnw --batch-mode --no-transfer-progress clean verify && \
+RUN ./mvnw --batch-mode --no-transfer-progress -DfailIfNoTests=true clean verify && \
     cd frontend && npm audit --audit-level=low
 
 FROM backend-build AS java-runtime

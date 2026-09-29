@@ -111,7 +111,7 @@ Playwright verified the desktop title and terminal styling, `gm`/`cat about.txt`
 
 The owner-reviewed inventory initially contained 24 repositories: six represented projects, four missing public candidates, eight missing private candidates, five forks, and one profile repository. The seven-entry audit baseline included one planned concept without a matching owned repository. The detailed inventory is retained locally because it names unselected private projects. After this audit, the owner selected Discord Option Tailer and Embedify for the release; their catalogue entries are the only approved additions.
 
-### Final integration record
+### Initial local validation record
 
 The final local build, dependency checks, workflow review, and executable-JAR/browser smoke checks are complete.
 
@@ -124,3 +124,15 @@ The final local build, dependency checks, workflow review, and executable-JAR/br
 - Workflow evidence: YAML parsing, inline shell syntax, Docker smoke shell syntax, and action pin checks passed. No local container daemon was available; private-runner/remote-BuildKit execution remains unverified.
 - Cleanup: the task-owned Java runtime on port 18080 and isolated `website-audit` browser were stopped after verification. No test server is being handed off.
 - Both staged and unstaged whitespace checks passed. The index contains only the deliberate dependency/generated-asset removals; source changes remain uncommitted. No push, workflow dispatch, image publication, production deployment, or catalogue addition occurred.
+
+## Subsequent release hardening
+
+After the initial audit, Joshua approved adding Discord Option Tailer and Embedify, committing/pushing the changes, publishing a container through CI, and deploying it to TrueNAS. The catalogue now contains nine entries. Embedify's repository visibility remains unchanged.
+
+- Updated the build to Spring Boot 4.1.1, Java 25 LTS, Node 26.10.0, React 19.3.0, React Router 8.4.0, Vite 8.3.1, TypeScript 7.0.2, and Maven 3.9.16. Java 25 is the maintained LTS choice within Spring Boot 4.1.1's supported Java range; Java 27 is outside that range.
+- The container now has separate build and runtime stages. `jdeps` and `jlink` produce the runtime; the published image runs as UID/GID 1001 and contains no Java compiler or Node toolchain.
+- CI runs the complete build inside pinned containers on the private TrueNAS runner, avoiding the Adoptium setup API timeout and missing host Node library. Docker action pins use current stable releases.
+- Removed Docker build-context test exclusions and enabled Maven `-DfailIfNoTests=true`; a successful container build must execute the backend tests. The seven tests also pass locally on Java 25.
+- The final image depends on a fresh non-root runtime smoke test and Trivy scan of its shared runtime filesystem. All detected vulnerability severities fail the build. The preceding Linux scan reported zero Alpine and application-JAR findings, and npm reported zero known vulnerabilities.
+
+Publication and production verification are recorded separately in the local release ledger; the earlier artifact hash and runtime checks above describe the initial audit build.
