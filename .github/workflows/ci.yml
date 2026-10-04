@@ -60,7 +60,7 @@ jobs:
           target: runtime
           platforms: linux/amd64
           push: false # Push-by-digest is configured in the exporter; tags follow the scan.
-          no-cache-filters: smoke-test,security-scan
+          no-cache-filters: runtime-base,smoke-test,security-scan
       - name: Generate SBOM and enforce High/Critical vulnerability gate
         uses: ./.github/actions/container-security
         with:
@@ -70,6 +70,8 @@ jobs:
           artifact-name: container-security-${{ github.job }}-${{ strategy.job-index || 0 }}-build-1
       - name: Finish and enforce BuildKit storage usage
         if: always()
+        # Keep failure reports; enforce sizing only after the complete build and scan.
+        continue-on-error: ${{ failure() || cancelled() }}
         run: ci-storage-efficiency finish
       - name: Upload BuildKit storage usage report
         if: always()
