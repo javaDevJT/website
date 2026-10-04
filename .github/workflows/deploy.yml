@@ -24,7 +24,7 @@ jobs:
     concurrency:
       group: website-production-deploy
       cancel-in-progress: false
-    runs-on: truenas-website
+    runs-on: truenas-website-storage-16g
     timeout-minutes: 40
     permissions:
       contents: read
@@ -73,9 +73,16 @@ jobs:
             type=raw,value=latest
             type=sha,prefix=main-
 
+      - name: Prepare disk build cache
+        id: ci_disk_cache_1
+        run: ci-cache "truenas-15ed4a3293d99fba"
       - name: Build and push Docker image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
+          cache-from: |
+            type=local,src=${{ steps.ci_disk_cache_1.outputs.from }}
+            type=gha,version=2,scope=truenas-15ed4a3293d99fba
+          cache-to: ${{ steps.ci_disk_cache_1.outputs.to && format('type=local,dest={0},mode=max,ignore-error=true', steps.ci_disk_cache_1.outputs.to) || '' }}
           context: .
           file: ./Dockerfile
           target: runtime
@@ -83,6 +90,4 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,version=2,scope=truenas-15ed4a3293d99fba
-          cache-to: type=gha,version=2,mode=max,scope=truenas-15ed4a3293d99fba
           platforms: linux/amd64
