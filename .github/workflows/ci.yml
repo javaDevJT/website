@@ -1,6 +1,9 @@
 name: CI Pipeline
 
 on:
+  schedule:
+    - cron: '5 4 * * *'
+      timezone: America/Detroit
   push:
     branches: [main, develop]
   pull_request:
@@ -32,16 +35,34 @@ jobs:
       - name: Prepare disk build cache
         id: ci_disk_cache_1
         run: ci-cache "truenas-15ed4a3293d99fba"
+      - name: Prepare immutable image and release tags
+        id: container_security_1
+        shell: bash
+        env:
+          SECURITY_PUBLISH: "false"
+          SECURITY_RELEASE_TAGS: |
+
+          SECURITY_REPORT_DIRECTORY: ${{ runner.temp }}/container-security/build-1
+        run: bash .github/actions/container-security/container-security.sh prepare
       - name: Test Backend, Verify Linked Runtime and Scan Vulnerabilities
+        id: container_build_1
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
+          outputs: ${{ steps.container_security_1.outputs.exporter }}
           cache-from: |
             type=local,src=${{ steps.ci_disk_cache_1.outputs.from }}
             type=gha,version=2,scope=truenas-15ed4a3293d99fba
           cache-to: ${{ steps.ci_disk_cache_1.outputs.to && format('type=local,dest={0},mode=max,ignore-error=true', steps.ci_disk_cache_1.outputs.to) || '' }}
           context: .
           file: ./Dockerfile
-          target: security-scan
+          target: runtime
           platforms: linux/amd64
-          push: false
+          push: false # Push-by-digest is configured in the exporter; tags follow the scan.
           no-cache-filters: smoke-test,security-scan
+      - name: Generate SBOM and enforce High/Critical vulnerability gate
+        uses: ./.github/actions/container-security
+        with:
+          image: oci-archive:${{ steps.container_security_1.outputs.archive }}
+          platforms: "linux/amd64"
+          report-directory: ${{ runner.temp }}/container-security/build-1
+          artifact-name: container-security-${{ github.job }}-${{ strategy.job-index || 0 }}-build-1

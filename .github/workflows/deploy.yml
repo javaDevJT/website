@@ -1,6 +1,9 @@
 name: Deploy to Production
 
 on:
+  schedule:
+    - cron: '5 4 * * *'
+      timezone: America/Detroit
   workflow_run:
     workflows: ["CI Pipeline"]
     types: [completed]
@@ -17,10 +20,11 @@ jobs:
   build-and-push:
     name: Build and Push Docker Image
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
+      (github.event_name == 'schedule' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
+      github.event.workflow_run.head_repository.full_name == github.repository)
     concurrency:
       group: website-production-deploy
       cancel-in-progress: false
@@ -29,17 +33,25 @@ jobs:
     permissions:
       contents: read
       packages: write
+      actions: read
 
     steps:
       - name: Checkout tested main commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 1
 
+      - name: Require successful daily CI for scheduled publication
+        if: github.event_name == 'schedule'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { waitForDailyCI } = require('./.github/scripts/wait-for-daily-ci.cjs');
+            await waitForDailyCI({ github, context, core });
       - name: Confirm tested commit is current main
         env:
-          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TESTED_SHA"
@@ -76,9 +88,20 @@ jobs:
       - name: Prepare disk build cache
         id: ci_disk_cache_1
         run: ci-cache "truenas-15ed4a3293d99fba"
+      - name: Prepare immutable image and release tags
+        id: container_security_1
+        shell: bash
+        env:
+          SECURITY_PUBLISH: "true"
+          SECURITY_RELEASE_TAGS: |
+            ${{ steps.meta.outputs.tags }}
+          SECURITY_REPORT_DIRECTORY: ${{ runner.temp }}/container-security/build-1
+        run: bash .github/actions/container-security/container-security.sh prepare
       - name: Build and push Docker image
+        id: container_build_1
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
+          outputs: ${{ steps.container_security_1.outputs.exporter }}
           cache-from: |
             type=local,src=${{ steps.ci_disk_cache_1.outputs.from }}
             type=gha,version=2,scope=truenas-15ed4a3293d99fba
@@ -87,7 +110,20 @@ jobs:
           file: ./Dockerfile
           target: runtime
           no-cache-filters: smoke-test,security-scan
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          push: false # Push-by-digest is configured in the exporter; tags follow the scan.
+          tags: ${{ steps.container_security_1.outputs.repository }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64
+      - name: Generate SBOM and enforce High/Critical vulnerability gate
+        uses: ./.github/actions/container-security
+        with:
+          image: registry:${{ steps.container_security_1.outputs.repository }}@${{ steps.container_build_1.outputs.digest }}
+          platforms: "linux/amd64"
+          report-directory: ${{ runner.temp }}/container-security/build-1
+          artifact-name: container-security-${{ github.job }}-${{ strategy.job-index || 0 }}-build-1
+      - name: Publish release tags only after the vulnerability gate passes
+        shell: bash
+        env:
+          SECURITY_IMAGE: ${{ steps.container_security_1.outputs.repository }}@${{ steps.container_build_1.outputs.digest }}
+          SECURITY_REPORT_DIRECTORY: ${{ runner.temp }}/container-security/build-1
+        run: bash .github/actions/container-security/container-security.sh publish
