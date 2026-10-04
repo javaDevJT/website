@@ -117,6 +117,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64
       - name: Generate SBOM and enforce High/Critical vulnerability gate
+        id: container_scan_1
         uses: ./.github/actions/container-security
         with:
           image: registry:${{ steps.container_security_1.outputs.repository }}@${{ steps.container_build_1.outputs.digest }}
@@ -126,7 +127,7 @@ jobs:
       - name: Finish and enforce BuildKit storage usage
         if: always()
         # Keep failure reports; enforce sizing only after the complete build and scan.
-        continue-on-error: ${{ failure() || cancelled() }}
+        continue-on-error: ${{ steps.container_build_1.outcome != 'success' || steps.container_scan_1.outcome != 'success' }}
         run: ci-storage-efficiency finish
       - name: Upload BuildKit storage usage report
         if: always()

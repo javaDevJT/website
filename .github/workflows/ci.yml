@@ -62,6 +62,7 @@ jobs:
           push: false # Push-by-digest is configured in the exporter; tags follow the scan.
           no-cache-filters: runtime-base,smoke-test,security-scan
       - name: Generate SBOM and enforce High/Critical vulnerability gate
+        id: container_scan_1
         uses: ./.github/actions/container-security
         with:
           image: oci-archive:${{ steps.container_security_1.outputs.archive }}
@@ -71,7 +72,7 @@ jobs:
       - name: Finish and enforce BuildKit storage usage
         if: always()
         # Keep failure reports; enforce sizing only after the complete build and scan.
-        continue-on-error: ${{ failure() || cancelled() }}
+        continue-on-error: ${{ steps.container_build_1.outcome != 'success' || steps.container_scan_1.outcome != 'success' }}
         run: ci-storage-efficiency finish
       - name: Upload BuildKit storage usage report
         if: always()
