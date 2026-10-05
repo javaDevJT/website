@@ -2,6 +2,19 @@
 # Java and Node are build tools only; the published image contains a jlink runtime.
 FROM node:26.10.0-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80 AS node-toolchain
 
+FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS zlib-build
+RUN apk add --no-cache alpine-sdk ca-certificates dash=0.5.13.1-r2 && \
+    adduser -D builder && addgroup builder abuild && \
+    mkdir -p /build/zlib /build/dash /packages /out && chown -R builder:builder /build /packages /out
+COPY --chown=builder:builder docker/zlib/APKBUILD /build/zlib/APKBUILD
+COPY --chown=builder:builder docker/dash/APKBUILD /build/dash/APKBUILD
+USER builder
+WORKDIR /build/zlib
+RUN abuild-keygen -an && REPODEST=/packages abuild -r && \
+    cp /packages/*/*/zlib-*.apk /out/zlib.apk && \
+    cd /build/dash && REPODEST=/packages abuild -r && \
+    cp /packages/*/*/dash-*.apk /out/dash.apk
+
 FROM eclipse-temurin:25.0.4.1_1-jdk-alpine-3.24@sha256:3fd2d245c4e0eba615fe366a71b8bd25f5db7104f53e4026b24bf508b880bd2a AS backend-build
 RUN apk add --no-cache libstdc++ libatomic
 COPY --from=node-toolchain /usr/local/ /usr/local/
@@ -27,10 +40,14 @@ RUN mkdir /app/unpacked && cd /app/unpacked && \
       --output /opt/java-runtime
 
 FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS runtime-base
+COPY --from=zlib-build /out/zlib.apk /tmp/zlib.apk
+COPY --from=zlib-build /out/dash.apk /tmp/dash.apk
 RUN apk upgrade --no-cache && \
-    apk add --no-cache ca-certificates libstdc++ zlib fontconfig font-dejavu && \
+    apk add --no-cache --allow-untrusted /tmp/zlib.apk /tmp/dash.apk && rm /tmp/zlib.apk /tmp/dash.apk && \
+    apk add --no-cache ca-certificates libstdc++ fontconfig font-dejavu curl && \
     addgroup -g 1001 -S spring && \
-    adduser -u 1001 -S spring -G spring
+    adduser -u 1001 -S spring -G spring && \
+    apk del --no-cache busybox busybox-binsh ssl_client
 ENV JAVA_HOME=/opt/java
 ENV PATH="$JAVA_HOME/bin:$PATH" \
     JAVA_OPTS="-Xms256m -Xmx512m -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -Djava.awt.headless=true"
@@ -40,19 +57,25 @@ COPY --from=backend-build --chmod=0444 /app/target/website-0.0.1-SNAPSHOT.jar /a
 USER 1001:1001
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
-  CMD wget -q -T 2 -O /dev/null http://127.0.0.1:8080/actuator/health || exit 1
+  CMD ["/usr/bin/dash", "-ec", "test \"$(curl --fail --silent --max-time 2 --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/actuator/health)\" = 200"]
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
 
 # Run the packaged app as the production UID to verify the linked Java modules,
 # PDF extraction, content parsing, and the actual generated web assets.
 FROM runtime-base AS smoke-test
-RUN set -eu; \
+RUN --mount=type=bind,from=node-toolchain,source=/bin/busybox,target=/tmp/smoke-busybox \
+    set -eu; \
+    /tmp/smoke-busybox mkdir /tmp/website-smoke-tools; \
+    /tmp/smoke-busybox --install -s /tmp/website-smoke-tools; \
+    export PATH="/tmp/website-smoke-tools:$PATH"; \
     test "$(id -u)" = 1001; \
+    test ! -e /bin/busybox; \
+    test ! -e /usr/bin/ssl_client; \
     test ! -e /opt/java/bin/javac; \
     java -version; \
     java $JAVA_OPTS -jar /app/app.jar > /tmp/website-smoke.log 2>&1 & \
     app_pid=$!; \
-    cleanup() { kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; }; \
+    cleanup() { kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; /tmp/smoke-busybox rm -rf /tmp/website-smoke-tools; }; \
     trap cleanup EXIT; \
     attempt=0; \
     while [ "$attempt" -lt 60 ]; do \
@@ -63,6 +86,9 @@ RUN set -eu; \
     done; \
     if [ "$attempt" -ge 60 ]; then cat /tmp/website-smoke.log; exit 1; fi; \
     grep -Eq '"status"[[:space:]]*:[[:space:]]*"UP"' /tmp/website-health.json; \
+    health_status="$(curl --fail --silent --max-time 5 --output /tmp/website-curl-health.json --write-out '%{http_code}' http://127.0.0.1:8080/actuator/health)"; \
+    test "$health_status" = 200; \
+    grep -Eq '"status"[[:space:]]*:[[:space:]]*"UP"' /tmp/website-curl-health.json; \
     wget -T 5 -qO /tmp/website-client-info.json http://127.0.0.1:8080/api/client/info; \
     grep -Eq '"hostname"[[:space:]]*:[[:space:]]*"javadevjt[.]tech"' /tmp/website-client-info.json; \
     grep -Eq '"username"[[:space:]]*:[[:space:]]*"visitor"' /tmp/website-client-info.json; \

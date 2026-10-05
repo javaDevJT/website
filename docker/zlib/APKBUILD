@@ -1,0 +1,41 @@
+# Maintainer: Joshua Terk
+pkgname=zlib
+# Upstream zlib.h reports 1.3.2.1-motley. Encode the pinned Git snapshot using
+# the official commit date and Alpine's recognized _gitYYYYMMDD suffix.
+pkgver=1.3.2.1_git20260715
+pkgrel=0
+pkgdesc="Compression and decompression library"
+url="https://zlib.net/"
+arch="x86_64"
+license="Zlib"
+makedepends="build-base"
+options="!dbg"
+
+_source_commit=bf3364d56678ae12892168d1ee22ac4e13ef80a3
+source="zlib-$_source_commit.tar.gz::https://codeload.github.com/madler/zlib/tar.gz/$_source_commit"
+builddir="$srcdir/zlib-$_source_commit"
+
+build() {
+	# Match Alpine's zlib build flags: optimize for speed and use its hardening.
+	export CFLAGS="$CFLAGS -O2"
+	CHOST="$CHOST" ./configure \
+		--prefix=/usr \
+		--shared \
+		--disable-crcvx
+	make
+}
+
+check() {
+	make check
+}
+
+package() {
+	make install DESTDIR="$pkgdir"
+	# Keep only the runtime shared library and its soname link.
+	rm -f "$pkgdir"/usr/lib/libz.a "$pkgdir"/usr/lib/libz.so
+	rm -rf "$pkgdir"/usr/include "$pkgdir"/usr/share "$pkgdir"/usr/lib/pkgconfig
+}
+
+sha512sums="
+482b344b482bd34f1ff9775e8da085918e6998ffd86e010ddc8667ee4c0c23f6a10f795c9d8d6f6169ab28cc4f175d401dbfcdc794dbd01c22ac4b5bdd5f9a95  zlib-bf3364d56678ae12892168d1ee22ac4e13ef80a3.tar.gz
+"

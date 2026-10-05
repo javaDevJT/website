@@ -1,0 +1,26 @@
+# Keep Alpine's signed, pinned shell binary; omit interactive-shell hooks whose
+# BusyBox dependency is unnecessary in this application container.
+pkgname=dash
+pkgver=0.5.13.1
+pkgrel=3
+pkgdesc="POSIX shell for containers without interactive shell registration"
+url="http://gondor.apana.org.au/~herbert/dash/"
+arch="x86_64"
+license="BSD-3-Clause"
+replaces="busybox-binsh"
+provides="cmd:sh=$pkgver"
+options="!dbg"
+
+build() {
+    test "$(apk info -v dash)" = "dash-$pkgver-r2"
+}
+
+check() {
+    test "$(/usr/bin/dash -c 'printf "%s" "$((2 + 2))"')" = 4
+}
+
+package() {
+    install -Dm755 /usr/bin/dash "$pkgdir/usr/bin/dash"
+    mkdir -p "$pkgdir/bin"
+    ln -s /usr/bin/dash "$pkgdir/bin/sh"
+}
