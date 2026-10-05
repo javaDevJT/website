@@ -1,3 +1,4 @@
+# Maintainer: Website build <noreply@example.invalid>
 # Keep Alpine's signed, pinned shell binary; omit interactive-shell hooks whose
 # BusyBox dependency is unnecessary in this application container.
 pkgname=dash

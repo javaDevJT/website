@@ -1,4 +1,4 @@
-# Maintainer: Joshua Terk
+# Maintainer: Website build <noreply@example.invalid>
 pkgname=zlib
 # Upstream zlib.h reports 1.3.2.1-motley. Encode the pinned Git snapshot using
 # the official commit date and Alpine's recognized _gitYYYYMMDD suffix.
