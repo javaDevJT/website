@@ -9,7 +9,7 @@ url="http://gondor.apana.org.au/~herbert/dash/"
 arch="x86_64"
 license="BSD-3-Clause"
 replaces="busybox-binsh"
-provides="/bin/sh cmd:sh=$pkgver"
+provides="/bin/sh"
 options="!dbg"
 
 build() {
