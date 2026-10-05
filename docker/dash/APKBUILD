@@ -13,7 +13,7 @@ provides="/bin/sh cmd:sh=$pkgver"
 options="!dbg"
 
 build() {
-    test "$(apk info -v dash)" = "dash-$pkgver-r2"
+	apk info --exists "dash=$pkgver-r2"
 }
 
 check() {
