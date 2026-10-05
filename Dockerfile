@@ -49,12 +49,13 @@ FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4c
 COPY --from=zlib-build /out/zlib.apk /tmp/zlib.apk
 COPY --from=zlib-build /out/dash.apk /tmp/dash.apk
 COPY --from=zlib-build /home/builder/.abuild/*.rsa.pub /etc/apk/keys/
-RUN apk upgrade --no-cache && \
-    apk add --no-cache /tmp/zlib.apk /tmp/dash.apk && rm /tmp/zlib.apk /tmp/dash.apk && \
-    apk add --no-cache ca-certificates libstdc++ fontconfig font-dejavu curl && \
+# BuildKit stores snapshots on tmpfs; exported OCI layers preserve this APK DB.
+RUN apk --root-tmpfs=no upgrade --no-cache && \
+    apk --root-tmpfs=no add --no-cache /tmp/zlib.apk /tmp/dash.apk && rm /tmp/zlib.apk /tmp/dash.apk && \
+    apk --root-tmpfs=no add --no-cache ca-certificates libstdc++ fontconfig font-dejavu curl && \
     addgroup -g 1001 -S spring && \
     adduser -u 1001 -S spring -G spring && \
-    apk del --no-cache busybox busybox-binsh ssl_client
+    apk --root-tmpfs=no del --no-cache busybox busybox-binsh ssl_client
 ENV JAVA_HOME=/opt/java
 ENV PATH="$JAVA_HOME/bin:$PATH" \
     JAVA_OPTS="-Xms256m -Xmx512m -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -Djava.awt.headless=true"
