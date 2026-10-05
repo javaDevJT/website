@@ -10,9 +10,13 @@ COPY --chown=builder:builder docker/zlib/APKBUILD /build/zlib/APKBUILD
 COPY --chown=builder:builder docker/dash/APKBUILD /build/dash/APKBUILD
 USER builder
 WORKDIR /build/zlib
+RUN abuild-keygen -an
+USER root
+RUN cp /home/builder/.abuild/*.rsa.pub /etc/apk/keys/
+USER builder
 # The SDK already contains all build dependencies. Avoid abuild's setuid APK
 # installer in the rootless private BuildKit sandbox; keep package checks/tests.
-RUN abuild-keygen -an && REPODEST=/packages abuild -d && \
+RUN REPODEST=/packages abuild -d && \
     cp /packages/*/*/zlib-*.apk /out/zlib.apk && \
     cd /build/dash && REPODEST=/packages abuild -d && \
     cp /packages/*/*/dash-*.apk /out/dash.apk
