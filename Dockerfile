@@ -71,10 +71,10 @@ ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
 # Run the packaged app as the production UID to verify the linked Java modules,
 # PDF extraction, content parsing, and the actual generated web assets.
 FROM runtime-base AS smoke-test
-RUN --mount=type=bind,from=node-toolchain,source=/bin/busybox,target=/tmp/smoke-busybox \
+RUN --mount=type=bind,from=node-toolchain,source=/bin/busybox,target=/tmp/busybox \
     set -eu; \
-    /tmp/smoke-busybox mkdir /tmp/website-smoke-tools; \
-    /tmp/smoke-busybox --install -s /tmp/website-smoke-tools; \
+    /tmp/busybox mkdir /tmp/website-smoke-tools; \
+    /tmp/busybox --install -s /tmp/website-smoke-tools; \
     export PATH="/tmp/website-smoke-tools:$PATH"; \
     test "$(id -u)" = 1001; \
     test ! -e /bin/busybox; \
@@ -83,7 +83,7 @@ RUN --mount=type=bind,from=node-toolchain,source=/bin/busybox,target=/tmp/smoke-
     java -version; \
     java $JAVA_OPTS -jar /app/app.jar > /tmp/website-smoke.log 2>&1 & \
     app_pid=$!; \
-    cleanup() { kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; /tmp/smoke-busybox rm -rf /tmp/website-smoke-tools; }; \
+    cleanup() { kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; /tmp/busybox rm -rf /tmp/website-smoke-tools; }; \
     trap cleanup EXIT; \
     attempt=0; \
     while [ "$attempt" -lt 60 ]; do \
