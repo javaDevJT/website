@@ -24,6 +24,13 @@ jobs:
         run: ci-storage-efficiency start
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
+      - name: Test scheduled publication CI guard
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { execFileSync } = require('node:child_process');
+            execFileSync(process.execPath, ['--test', '.github/scripts/wait-for-daily-ci.test.cjs'], { stdio: 'inherit' });
+
       - name: Set up authenticated remote BuildKit
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:

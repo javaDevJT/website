@@ -37,7 +37,7 @@ function makeWorkflowRun(overrides = {}) {
   };
 }
 
-function makeHarness(runResponses, { deployRun, context = makeContext() } = {}) {
+function makeHarness(runResponses, { deployRun, deployErrors = [], context = makeContext() } = {}) {
   let elapsedMs = 0;
   const listCalls = [];
   const sleeps = [];
@@ -47,14 +47,17 @@ function makeHarness(runResponses, { deployRun, context = makeContext() } = {}) 
       actions: {
         getWorkflowRun: async (args) => {
           assert.deepEqual(args, { owner: OWNER, repo: REPO, run_id: context.runId });
+          if (deployErrors.length) throw deployErrors.shift();
           return {
             data: deployRun ?? makeWorkflowRun({ id: context.runId }),
           };
         },
         listWorkflowRuns: async (args) => {
           listCalls.push(args);
+          const response = runResponses.shift() ?? [];
+          if (response instanceof Error) throw response;
           return {
-            data: { workflow_runs: runResponses.shift() ?? [] },
+            data: { workflow_runs: response },
           };
         },
       },
@@ -75,6 +78,7 @@ function makeHarness(runResponses, { deployRun, context = makeContext() } = {}) 
     infos,
     listCalls,
     sleeps,
+    advance: (milliseconds) => { elapsedMs += milliseconds; },
   };
 }
 
@@ -152,4 +156,81 @@ test('bounds polling by the timeout and shortens the final sleep to the remainin
   assert.equal(harness.listCalls.length, 4);
   assert.equal(harness.args.now(), 45);
   assert.deepEqual(harness.infos, []);
+});
+
+function temporaryDnsError() {
+  return new Error('GitHub request failed', {
+    cause: new TypeError('fetch failed', {
+      cause: Object.assign(new Error('temporary DNS failure'), { code: 'EAI_AGAIN' }),
+    }),
+  });
+}
+
+test('retries temporary DNS failures in both deployment and CI reads before verifying CI', async () => {
+  const harness = makeHarness(
+    [temporaryDnsError(), [makeWorkflowRun()]],
+    { deployErrors: [temporaryDnsError()] },
+  );
+
+  const result = await waitForDailyCI({
+    ...harness.args,
+    timeoutMs: 100,
+    pollIntervalMs: 20,
+  });
+
+  assert.deepEqual(result, { runId: 41, scheduledDate: DETROIT_DAY });
+  assert.deepEqual(harness.sleeps, [20, 20]);
+  assert.equal(harness.listCalls.length, 2);
+});
+
+test('temporary API failures share the polling deadline and cannot authorize publication', async () => {
+  const harness = makeHarness([
+    temporaryDnsError(), temporaryDnsError(), temporaryDnsError(), [makeWorkflowRun()],
+  ]);
+
+  await assert.rejects(
+    waitForDailyCI({ ...harness.args, timeoutMs: 45, pollIntervalMs: 20 }),
+    /Timed out.*GitHub.*refusing deployment/,
+  );
+  assert.deepEqual(harness.sleeps, [20, 20, 5]);
+  assert.equal(harness.listCalls.length, 3);
+  assert.equal(harness.args.now(), 45);
+  assert.equal(harness.infos.some((message) => message.startsWith('Verified')), false);
+});
+
+test('rejects a successful GitHub response that arrives after the wait deadline', async () => {
+  const harness = makeHarness([[makeWorkflowRun()]]);
+  const originalRead = harness.args.github.rest.actions.listWorkflowRuns;
+  harness.args.github.rest.actions.listWorkflowRuns = async (args) => {
+    const response = await originalRead(args);
+    harness.advance(46);
+    return response;
+  };
+
+  await assert.rejects(
+    waitForDailyCI({ ...harness.args, timeoutMs: 45, pollIntervalMs: 20 }),
+    /Timed out.*GitHub.*refusing deployment/,
+  );
+  assert.equal(harness.infos.some((message) => message.startsWith('Verified')), false);
+});
+
+test('retries temporary server errors but still rejects an unsuccessful scheduled CI run', async () => {
+  const error = Object.assign(new Error('Bad Gateway'), { status: 502 });
+  const harness = makeHarness([error, [makeWorkflowRun({ conclusion: 'failure' })]]);
+
+  await assert.rejects(
+    waitForDailyCI({ ...harness.args, timeoutMs: 100, pollIntervalMs: 20 }),
+    /Scheduled CI run 41 completed with conclusion failure; refusing deployment/,
+  );
+  assert.deepEqual(harness.sleeps, [20]);
+});
+
+test('does not retry authentication, authorization, not-found, or unknown request failures', async () => {
+  for (const status of [401, 403, 404, undefined]) {
+    const error = Object.assign(new Error('permanent request failure'), { status });
+    const harness = makeHarness([error]);
+    await assert.rejects(waitForDailyCI(harness.args), (actual) => actual === error);
+    assert.deepEqual(harness.sleeps, []);
+    assert.equal(harness.listCalls.length, 1);
+  }
 });

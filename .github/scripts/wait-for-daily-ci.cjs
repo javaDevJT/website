@@ -11,6 +11,18 @@ const DETROIT_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
 
 const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
 const DEFAULT_POLL_INTERVAL_MS = 20 * 1000;
+const TEMPORARY_NETWORK_ERRORS = new Set(['EAI_AGAIN', 'ECONNRESET', 'ETIMEDOUT']);
+
+function retryableReadFailure(error) {
+  if ([500, 502, 503, 504].includes(error?.status)) return `HTTP ${error.status}`;
+
+  const visited = new Set();
+  for (let cause = error; cause && !visited.has(cause); cause = cause.cause) {
+    visited.add(cause);
+    if (TEMPORARY_NETWORK_ERRORS.has(cause.code)) return cause.code;
+  }
+  return null;
+}
 
 function detroitCalendarDate(timestamp) {
   if (typeof timestamp !== 'string') return null;
@@ -77,11 +89,40 @@ async function waitForDailyCI({
   }
 
   const startedAt = now();
-  const deploymentResponse = await github.rest.actions.getWorkflowRun({
+  // Retry read-only transport failures within the same deadline as CI polling.
+  // Every recovered response still has to pass the repository/SHA/date gates.
+  async function readGitHub(label, request) {
+    let retrying = false;
+    const timedOut = (cause) => new Error(
+      `Timed out after ${timeoutMs}ms reading GitHub ${label}; refusing deployment`,
+      { cause },
+    );
+    while (true) {
+      const elapsedMs = now() - startedAt;
+      // A zero timeout still permits the original immediate lookup, but no retry.
+      if (elapsedMs > timeoutMs || (retrying && elapsedMs >= timeoutMs)) throw timedOut();
+      try {
+        const response = await request();
+        if (now() - startedAt > timeoutMs) throw timedOut();
+        return response;
+      } catch (error) {
+        const reason = retryableReadFailure(error);
+        if (!reason) throw error;
+
+        const remainingMs = timeoutMs - (now() - startedAt);
+        if (remainingMs <= 0) throw timedOut(error);
+        core.info(`Temporary GitHub ${label} read failure (${reason}); retrying within the CI wait deadline.`);
+        await sleep(Math.min(pollIntervalMs, remainingMs));
+        retrying = true;
+      }
+    }
+  }
+
+  const deploymentResponse = await readGitHub('deployment run', () => github.rest.actions.getWorkflowRun({
     owner,
     repo,
     run_id: deploymentRunId,
-  });
+  }));
   const deploymentRun = deploymentResponse?.data;
 
   if (
@@ -100,14 +141,14 @@ async function waitForDailyCI({
   }
 
   while (true) {
-    const response = await github.rest.actions.listWorkflowRuns({
+    const response = await readGitHub('scheduled CI runs', () => github.rest.actions.listWorkflowRuns({
       owner,
       repo,
       workflow_id: 'ci.yml',
       event: 'schedule',
       branch: 'main',
       per_page: 100,
-    });
+    }));
     const workflowRuns = response?.data?.workflow_runs;
     if (!Array.isArray(workflowRuns)) {
       throw new Error('GitHub returned an invalid CI workflow-runs response');
