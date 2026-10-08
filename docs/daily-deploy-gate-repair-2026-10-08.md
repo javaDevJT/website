@@ -6,7 +6,7 @@ Scheduled production deployment run [37801492760](https://github.com/javaDevJT/w
 
 ## Repair
 
-The deployment gate now retries only transient GET failures, including temporary DNS/socket errors and HTTP 408, 425, 429, and 5xx responses. It makes at most three attempts, uses bounded exponential backoff, and propagates permanent errors immediately. It still rejects failed matching CI and requires the deploy run and CI run to share the same repository, `main` branch, full commit SHA, and Detroit calendar day.
+The deployment gate retries temporary DNS/socket errors and HTTP 500, 502, 503, and 504 responses within the existing 20-minute CI wait deadline, using bounded 20-second waits. It propagates permanent errors immediately. It still rejects failed matching CI and requires the deploy run and CI run to share the same repository, `main` branch, full commit SHA, and Detroit calendar day.
 
 The deployment workflow also has a manual validation route on `main`. A manual deploy must find a successful same-day `workflow_dispatch` CI run for the identical repository, branch, and SHA. The workflow keeps both current-main checks and the vulnerability scan before publishing release tags. Manual validation does not emulate a schedule event.
 
@@ -14,6 +14,6 @@ The CI workflow runs the helper's Node tests using its already pinned `actions/g
 
 ## Validation
 
-- Local focused test command: `node --test .github/scripts/wait-for-daily-ci.test.cjs` — 10 tests passed.
+- Local focused test command: `node --test .github/scripts/wait-for-daily-ci.test.cjs` — 11 tests passed after adding manual-event identity coverage.
 - Workflow checks and a fresh Actions run at the repaired source: recorded after remote validation.
 - Publication or remaining blocker: recorded after the repaired-source deploy validation.

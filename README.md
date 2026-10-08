@@ -2,7 +2,7 @@
 
 A responsive Linux-terminal-themed portfolio for Joshua Terk, Senior Software Engineer. The site presents his work, writing, technology interests, and automotive projects through a custom React terminal backed by Spring Boot APIs.
 
-The [maintenance audit](docs/maintenance-audit-2026-09-28.md) records the code review, dependency updates, and verification evidence. Current source navigation and build instructions follow.
+The [maintenance audit](docs/maintenance-audit-2026-09-28.md) records the code review and dependency updates. The [October 8 checkpoint](docs/maintenance-checkpoint-2026-10-08.md) records current release verification, and the [daily deploy gate repair](docs/daily-deploy-gate-repair-2026-10-08.md) describes transient API retries and the manual validation route. Current source navigation and build instructions follow.
 
 ## Requirements
 

@@ -11,22 +11,18 @@ const DETROIT_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
 
 const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
 const DEFAULT_POLL_INTERVAL_MS = 20 * 1000;
-const MAX_REQUEST_ATTEMPTS = 3;
-const RETRYABLE_NETWORK_CODES = new Set([
-  'EAI_AGAIN',
-  'ECONNREFUSED',
-  'ECONNRESET',
-  'EHOSTUNREACH',
-  'ENETUNREACH',
-  'EPIPE',
-  'ESOCKETTIMEDOUT',
-  'ETIMEDOUT',
-  'UND_ERR_CONNECT_TIMEOUT',
-  'UND_ERR_SOCKET',
-]);
-const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429]);
-const RETRY_BASE_DELAY_MS = 1000;
-const MAX_RETRY_DELAY_MS = 10000;
+const TEMPORARY_NETWORK_ERRORS = new Set(['EAI_AGAIN', 'ECONNRESET', 'ETIMEDOUT']);
+
+function retryableReadFailure(error) {
+  if ([500, 502, 503, 504].includes(error?.status)) return `HTTP ${error.status}`;
+
+  const visited = new Set();
+  for (let cause = error; cause && !visited.has(cause); cause = cause.cause) {
+    visited.add(cause);
+    if (TEMPORARY_NETWORK_ERRORS.has(cause.code)) return cause.code;
+  }
+  return null;
+}
 
 function detroitCalendarDate(timestamp) {
   if (typeof timestamp !== 'string') return null;
@@ -51,96 +47,6 @@ function repositoryMatches(run, expectedFullName) {
   const repository = run?.repository?.full_name;
   return typeof repository === 'string'
     && repository.toLowerCase() === expectedFullName.toLowerCase();
-}
-
-function errorStatus(error) {
-  const status = error?.status ?? error?.response?.status;
-  return Number.isInteger(status) ? status : null;
-}
-
-function errorCode(error) {
-  let current = error;
-  for (let depth = 0; current && depth < 4; depth += 1) {
-    if (typeof current.code === 'string') return current.code;
-    current = current.cause;
-  }
-
-  // Octokit may preserve a native network error only in the wrapped message.
-  const message = String(error?.message ?? '');
-  return [...RETRYABLE_NETWORK_CODES].find((candidate) => (
-    new RegExp(`\\b${candidate}\\b`).test(message)
-  )) ?? null;
-}
-
-function responseHeader(error, name) {
-  const headers = error?.response?.headers ?? error?.headers;
-  if (!headers) return undefined;
-  return headers[name.toLowerCase()] ?? headers.get?.(name.toLowerCase());
-}
-
-function isTransientRequestError(error) {
-  const status = errorStatus(error);
-  if (
-    RETRYABLE_HTTP_STATUSES.has(status)
-    || (status !== null && status >= 500)
-  ) {
-    return true;
-  }
-
-  if (
-    status === 403
-    && (responseHeader(error, 'retry-after') !== undefined
-      || responseHeader(error, 'x-ratelimit-remaining') === '0')
-  ) {
-    return true;
-  }
-
-  const code = errorCode(error);
-  if (code && RETRYABLE_NETWORK_CODES.has(code)) return true;
-
-  return false;
-}
-
-function retryDelayMs(error, attempt) {
-  const retryAfter = responseHeader(error, 'retry-after');
-  if (retryAfter !== undefined) {
-    const seconds = Number(retryAfter);
-    const requestedDelay = Number.isFinite(seconds)
-      ? seconds * 1000
-      : Date.parse(retryAfter) - Date.now();
-    if (Number.isFinite(requestedDelay)) {
-      return Math.min(MAX_RETRY_DELAY_MS, Math.max(0, requestedDelay));
-    }
-  }
-
-  const resetAt = responseHeader(error, 'x-ratelimit-reset');
-  if (resetAt !== undefined && responseHeader(error, 'x-ratelimit-remaining') === '0') {
-    const requestedDelay = Number(resetAt) * 1000 - Date.now();
-    if (Number.isFinite(requestedDelay)) {
-      return Math.min(MAX_RETRY_DELAY_MS, Math.max(0, requestedDelay));
-    }
-  }
-
-  return Math.min(MAX_RETRY_DELAY_MS, RETRY_BASE_DELAY_MS * (2 ** (attempt - 1)));
-}
-
-async function requestWithRetry(method, request, { sleep, core }) {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      return await request();
-    } catch (error) {
-      if (attempt >= MAX_REQUEST_ATTEMPTS || !isTransientRequestError(error)) {
-        throw error;
-      }
-
-      const delayMs = retryDelayMs(error, attempt);
-      const reason = errorStatus(error) ?? errorCode(error) ?? 'transient network error';
-      core.info(
-        `GitHub Actions ${method} failed transiently (${reason}); retrying attempt ${attempt + 1}/${MAX_REQUEST_ATTEMPTS} in ${delayMs}ms.`,
-      );
-      await sleep(delayMs);
-    }
-  }
 }
 
 function requireValidTiming(timeoutMs, pollIntervalMs) {
@@ -174,28 +80,50 @@ async function waitForDailyCI({
   const expectedFullName = `${owner}/${repo}`;
   const expectedSha = context?.sha;
   const deploymentRunId = context?.runId;
+  const deploymentEvent = context?.eventName;
 
   if (!owner || !repo || !expectedSha || !deploymentRunId) {
     throw new TypeError('GitHub repository, SHA, and workflow run context are required');
   }
-  const deploymentEvent = context.eventName;
-  if (
-    !['schedule', 'workflow_dispatch'].includes(deploymentEvent)
-    || context.ref !== 'refs/heads/main'
-  ) {
+  if (!['schedule', 'workflow_dispatch'].includes(deploymentEvent) || context.ref !== 'refs/heads/main') {
     throw new Error('CI wait is only valid for a scheduled or manually dispatched run on main');
   }
 
   const startedAt = now();
-  const deploymentResponse = await requestWithRetry(
-    'getWorkflowRun',
-    () => github.rest.actions.getWorkflowRun({
-      owner,
-      repo,
-      run_id: deploymentRunId,
-    }),
-    { sleep, core },
-  );
+  // Retry read-only transport failures within the same deadline as CI polling.
+  // Every recovered response still has to pass the repository/SHA/date gates.
+  async function readGitHub(label, request) {
+    let retrying = false;
+    const timedOut = (cause) => new Error(
+      `Timed out after ${timeoutMs}ms reading GitHub ${label}; refusing deployment`,
+      { cause },
+    );
+    while (true) {
+      const elapsedMs = now() - startedAt;
+      // A zero timeout still permits the original immediate lookup, but no retry.
+      if (elapsedMs > timeoutMs || (retrying && elapsedMs >= timeoutMs)) throw timedOut();
+      try {
+        const response = await request();
+        if (now() - startedAt > timeoutMs) throw timedOut();
+        return response;
+      } catch (error) {
+        const reason = retryableReadFailure(error);
+        if (!reason) throw error;
+
+        const remainingMs = timeoutMs - (now() - startedAt);
+        if (remainingMs <= 0) throw timedOut(error);
+        core.info(`Temporary GitHub ${label} read failure (${reason}); retrying within the CI wait deadline.`);
+        await sleep(Math.min(pollIntervalMs, remainingMs));
+        retrying = true;
+      }
+    }
+  }
+
+  const deploymentResponse = await readGitHub('deployment run', () => github.rest.actions.getWorkflowRun({
+    owner,
+    repo,
+    run_id: deploymentRunId,
+  }));
   const deploymentRun = deploymentResponse?.data;
 
   if (
@@ -215,18 +143,14 @@ async function waitForDailyCI({
   const ciRunKind = deploymentEvent === 'schedule' ? 'scheduled' : 'manually dispatched';
 
   while (true) {
-    const response = await requestWithRetry(
-      'listWorkflowRuns',
-      () => github.rest.actions.listWorkflowRuns({
-        owner,
-        repo,
-        workflow_id: 'ci.yml',
-        event: deploymentEvent,
-        branch: 'main',
-        per_page: 100,
-      }),
-      { sleep, core },
-    );
+    const response = await readGitHub(`${ciRunKind} CI runs`, () => github.rest.actions.listWorkflowRuns({
+      owner,
+      repo,
+      workflow_id: 'ci.yml',
+      event: deploymentEvent,
+      branch: 'main',
+      per_page: 100,
+    }));
     const workflowRuns = response?.data?.workflow_runs;
     if (!Array.isArray(workflowRuns)) {
       throw new Error('GitHub returned an invalid CI workflow-runs response');
@@ -245,7 +169,7 @@ async function waitForDailyCI({
     ));
     if (unsuccessfulRun) {
       throw new Error(
-        `Scheduled CI run ${unsuccessfulRun.id} completed with conclusion ${unsuccessfulRun.conclusion ?? 'unknown'}; refusing deployment`,
+        `${ciRunKind[0].toUpperCase()}${ciRunKind.slice(1)} CI run ${unsuccessfulRun.id} completed with conclusion ${unsuccessfulRun.conclusion ?? 'unknown'}; refusing deployment`,
       );
     }
 
