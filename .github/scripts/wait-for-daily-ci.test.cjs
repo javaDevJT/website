@@ -49,7 +49,7 @@ function makeHarness(runResponses, { deployRun, deployErrors = [], context = mak
           assert.deepEqual(args, { owner: OWNER, repo: REPO, run_id: context.runId });
           if (deployErrors.length) throw deployErrors.shift();
           return {
-            data: deployRun ?? makeWorkflowRun({ id: context.runId }),
+            data: deployRun ?? makeWorkflowRun({ id: context.runId, event: context.eventName }),
           };
         },
         listWorkflowRuns: async (args) => {
@@ -120,6 +120,53 @@ test('fails closed when the matching scheduled CI run completed unsuccessfully',
   );
   assert.equal(harness.listCalls.length, 1);
   assert.deepEqual(harness.infos, []);
+});
+
+test('validates a manual deployment against same-day manually dispatched CI for the same commit', async () => {
+  const manualContext = makeContext({ eventName: 'workflow_dispatch' });
+  const harness = makeHarness(
+    [[makeWorkflowRun({ event: 'workflow_dispatch' })]],
+    { context: manualContext },
+  );
+
+  const result = await waitForDailyCI(harness.args);
+
+  assert.deepEqual(result, { runId: 41, scheduledDate: DETROIT_DAY });
+  assert.equal(harness.listCalls[0].event, 'workflow_dispatch');
+  assert.deepEqual(harness.infos, [`Verified manually dispatched CI run 41 for ${DETROIT_DAY}.`]);
+});
+
+test('rejects manual deployment event, branch, and CI-run identity mismatches', async () => {
+  const manualContext = makeContext({ eventName: 'workflow_dispatch' });
+  const wrongDeployEvent = makeHarness([], {
+    context: manualContext,
+    deployRun: makeWorkflowRun({ event: 'schedule' }),
+  });
+
+  await assert.rejects(
+    waitForDailyCI(wrongDeployEvent.args),
+    /Could not verify this workflow_dispatch deploy run belongs to main in the current repository/,
+  );
+  assert.equal(wrongDeployEvent.listCalls.length, 0);
+
+  const wrongBranch = makeHarness([], {
+    context: makeContext({ eventName: 'workflow_dispatch', ref: 'refs/heads/release' }),
+  });
+  await assert.rejects(
+    waitForDailyCI(wrongBranch.args),
+    /CI wait is only valid for a scheduled or manually dispatched run on main/,
+  );
+  assert.equal(wrongBranch.listCalls.length, 0);
+
+  const wrongCiEvent = makeHarness(
+    [[makeWorkflowRun({ event: 'schedule' })]],
+    { context: manualContext },
+  );
+  await assert.rejects(
+    waitForDailyCI({ ...wrongCiEvent.args, timeoutMs: 0 }),
+    /Timed out after 0ms waiting for manually dispatched CI on 2026-10-04; refusing deployment/,
+  );
+  assert.equal(wrongCiEvent.listCalls[0].event, 'workflow_dispatch');
 });
 
 test('does not accept a different SHA, event, head repository, or Detroit calendar day', async () => {

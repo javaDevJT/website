@@ -80,12 +80,13 @@ async function waitForDailyCI({
   const expectedFullName = `${owner}/${repo}`;
   const expectedSha = context?.sha;
   const deploymentRunId = context?.runId;
+  const deploymentEvent = context?.eventName;
 
   if (!owner || !repo || !expectedSha || !deploymentRunId) {
     throw new TypeError('GitHub repository, SHA, and workflow run context are required');
   }
-  if (context.eventName !== 'schedule' || context.ref !== 'refs/heads/main') {
-    throw new Error('Daily CI wait is only valid for a scheduled run on main');
+  if (!['schedule', 'workflow_dispatch'].includes(deploymentEvent) || context.ref !== 'refs/heads/main') {
+    throw new Error('CI wait is only valid for a scheduled or manually dispatched run on main');
   }
 
   const startedAt = now();
@@ -127,25 +128,26 @@ async function waitForDailyCI({
 
   if (
     !deploymentRun
-    || deploymentRun.event !== 'schedule'
+    || deploymentRun.event !== deploymentEvent
     || deploymentRun.head_branch !== 'main'
     || deploymentRun.head_sha !== expectedSha
     || !repositoryMatches(deploymentRun, expectedFullName)
   ) {
-    throw new Error('Could not verify this scheduled deploy run belongs to main in the current repository');
+    throw new Error(`Could not verify this ${deploymentEvent} deploy run belongs to main in the current repository`);
   }
 
   const scheduledDate = detroitCalendarDate(deploymentRun.created_at);
   if (!scheduledDate) {
-    throw new Error('Scheduled deploy run has no valid created_at timestamp');
+    throw new Error('Deploy run has no valid created_at timestamp');
   }
+  const ciRunKind = deploymentEvent === 'schedule' ? 'scheduled' : 'manually dispatched';
 
   while (true) {
-    const response = await readGitHub('scheduled CI runs', () => github.rest.actions.listWorkflowRuns({
+    const response = await readGitHub(`${ciRunKind} CI runs`, () => github.rest.actions.listWorkflowRuns({
       owner,
       repo,
       workflow_id: 'ci.yml',
-      event: 'schedule',
+      event: deploymentEvent,
       branch: 'main',
       per_page: 100,
     }));
@@ -155,7 +157,7 @@ async function waitForDailyCI({
     }
 
     const matchingRuns = workflowRuns.filter((run) => (
-      run?.event === 'schedule'
+      run?.event === deploymentEvent
       && run.head_branch === 'main'
       && run.head_sha === expectedSha
       && repositoryMatches(run, expectedFullName)
@@ -167,7 +169,7 @@ async function waitForDailyCI({
     ));
     if (unsuccessfulRun) {
       throw new Error(
-        `Scheduled CI run ${unsuccessfulRun.id} completed with conclusion ${unsuccessfulRun.conclusion ?? 'unknown'}; refusing deployment`,
+        `${ciRunKind[0].toUpperCase()}${ciRunKind.slice(1)} CI run ${unsuccessfulRun.id} completed with conclusion ${unsuccessfulRun.conclusion ?? 'unknown'}; refusing deployment`,
       );
     }
 
@@ -175,7 +177,7 @@ async function waitForDailyCI({
       run.status === 'completed' && run.conclusion === 'success'
     ));
     if (successfulRun) {
-      core.info(`Verified scheduled CI run ${successfulRun.id} for ${scheduledDate}.`);
+      core.info(`Verified ${ciRunKind} CI run ${successfulRun.id} for ${scheduledDate}.`);
       return {
         runId: successfulRun.id,
         scheduledDate,
@@ -185,7 +187,7 @@ async function waitForDailyCI({
     const remainingMs = timeoutMs - (now() - startedAt);
     if (remainingMs <= 0) {
       throw new Error(
-        `Timed out after ${timeoutMs}ms waiting for scheduled CI on ${scheduledDate}; refusing deployment`,
+        `Timed out after ${timeoutMs}ms waiting for ${ciRunKind} CI on ${scheduledDate}; refusing deployment`,
       );
     }
 
