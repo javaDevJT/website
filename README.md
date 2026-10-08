@@ -43,7 +43,7 @@ Vite serves the development UI on port 3000. `npm run build` runs TypeScript che
 
 ## CI and containers
 
-[CI](.github/workflows/ci.yml) and [deployment configuration](.github/workflows/deploy.yml) contain the automated build and image-publication rules. See the [maintenance audit](docs/maintenance-audit-2026-09-28.md) for the private-runner contract, validation evidence, and activation boundaries.
+[CI](.github/workflows/ci.yml) and [deployment configuration](.github/workflows/deploy.yml) contain the automated build and image-publication rules. See the [maintenance audit](docs/maintenance-audit-2026-09-28.md) for the private-runner contract, validation evidence, and activation boundaries, and the [daily deploy gate repair](docs/daily-deploy-gate-repair-2026-10-08.md) for transient API retry and manual validation behavior.
 
 The [Dockerfile](Dockerfile) tests and builds with Java 25 and Node 26, then uses `jdeps` and `jlink` to create the Java runtime. The final Alpine image contains the application and linked runtime, runs as UID/GID 1001, and excludes Maven, Node, Java compiler tools, and source resources outside the JAR. CI boots that image, exercises PDF/content/UI routes, and scans its filesystem with Trivy before image publication. Any reported OS or Java-library vulnerability fails the scan; the scan uses current advisory data rather than guaranteeing future vulnerability absence.
 

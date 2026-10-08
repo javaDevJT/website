@@ -37,7 +37,12 @@ function makeWorkflowRun(overrides = {}) {
   };
 }
 
-function makeHarness(runResponses, { deployRun, context = makeContext() } = {}) {
+function makeHarness(runResponses, {
+  deployRun,
+  context = makeContext(),
+  getErrors = [],
+  listErrors = [],
+} = {}) {
   let elapsedMs = 0;
   const listCalls = [];
   const sleeps = [];
@@ -47,12 +52,14 @@ function makeHarness(runResponses, { deployRun, context = makeContext() } = {}) 
       actions: {
         getWorkflowRun: async (args) => {
           assert.deepEqual(args, { owner: OWNER, repo: REPO, run_id: context.runId });
+          if (getErrors.length > 0) throw getErrors.shift();
           return {
-            data: deployRun ?? makeWorkflowRun({ id: context.runId }),
+            data: deployRun ?? makeWorkflowRun({ id: context.runId, event: context.eventName }),
           };
         },
         listWorkflowRuns: async (args) => {
           listCalls.push(args);
+          if (listErrors.length > 0) throw listErrors.shift();
           return {
             data: { workflow_runs: runResponses.shift() ?? [] },
           };
@@ -103,6 +110,117 @@ test('waits for the same-day scheduled CI run for the deploy SHA and reports its
     branch: 'main',
     per_page: 100,
   });
+});
+
+test('retries transient deployment and CI GET errors with bounded backoff', async () => {
+  const harness = makeHarness(
+    [[makeWorkflowRun()]],
+    {
+      getErrors: [new Error('RequestError getaddrinfo EAI_AGAIN api.github.com')],
+      listErrors: [
+        Object.assign(new Error('temporary upstream failure'), { status: 502 }),
+        Object.assign(new Error('temporary upstream failure'), { status: 503 }),
+      ],
+    },
+  );
+
+  const result = await waitForDailyCI(harness.args);
+
+  assert.deepEqual(result, { runId: 41, scheduledDate: DETROIT_DAY });
+  assert.deepEqual(harness.sleeps, [1000, 1000, 2000]);
+  assert.equal(harness.listCalls.length, 3);
+  assert.deepEqual(harness.infos.slice(0, 3), [
+    'GitHub Actions getWorkflowRun failed transiently (EAI_AGAIN); retrying attempt 2/3 in 1000ms.',
+    'GitHub Actions listWorkflowRuns failed transiently (502); retrying attempt 2/3 in 1000ms.',
+    'GitHub Actions listWorkflowRuns failed transiently (503); retrying attempt 3/3 in 2000ms.',
+  ]);
+  assert.equal(harness.infos.at(-1), `Verified scheduled CI run 41 for ${DETROIT_DAY}.`);
+});
+
+test('stops after the bounded retry count when a transient API error persists', async () => {
+  const persistentError = Object.assign(new Error('temporary upstream failure'), { status: 503 });
+  const harness = makeHarness([], { listErrors: [persistentError, persistentError, persistentError] });
+
+  await assert.rejects(waitForDailyCI(harness.args), (error) => error === persistentError);
+
+  assert.equal(harness.listCalls.length, 3);
+  assert.deepEqual(harness.sleeps, [1000, 2000]);
+  assert.deepEqual(harness.infos, [
+    'GitHub Actions listWorkflowRuns failed transiently (503); retrying attempt 2/3 in 1000ms.',
+    'GitHub Actions listWorkflowRuns failed transiently (503); retrying attempt 3/3 in 2000ms.',
+  ]);
+});
+
+test('does not retry a permanent API error', async () => {
+  const permanentError = Object.assign(new Error('Not Found'), { status: 404 });
+  const harness = makeHarness([], { listErrors: [permanentError] });
+
+  await assert.rejects(waitForDailyCI(harness.args), (error) => error === permanentError);
+
+  assert.equal(harness.listCalls.length, 1);
+  assert.deepEqual(harness.sleeps, []);
+  assert.deepEqual(harness.infos, []);
+});
+
+test('validates a manual deployment against same-day manually dispatched CI for the same commit', async () => {
+  const manualContext = makeContext({ eventName: 'workflow_dispatch' });
+  const harness = makeHarness(
+    [[makeWorkflowRun({ event: 'workflow_dispatch' })]],
+    { context: manualContext },
+  );
+
+  const result = await waitForDailyCI(harness.args);
+
+  assert.deepEqual(result, { runId: 41, scheduledDate: DETROIT_DAY });
+  assert.equal(harness.listCalls[0].event, 'workflow_dispatch');
+  assert.deepEqual(harness.infos, [`Verified manually dispatched CI run 41 for ${DETROIT_DAY}.`]);
+});
+
+test('rejects manual deployment event, branch, and CI-run identity mismatches', async () => {
+  const manualContext = makeContext({ eventName: 'workflow_dispatch' });
+  const wrongDeployEvent = makeHarness([], {
+    context: manualContext,
+    deployRun: makeWorkflowRun({ event: 'schedule' }),
+  });
+
+  await assert.rejects(
+    waitForDailyCI(wrongDeployEvent.args),
+    /Could not verify this workflow_dispatch deploy run belongs to main in the current repository/,
+  );
+  assert.equal(wrongDeployEvent.listCalls.length, 0);
+
+  const wrongBranch = makeHarness([], {
+    context: makeContext({ eventName: 'workflow_dispatch', ref: 'refs/heads/release' }),
+  });
+  await assert.rejects(
+    waitForDailyCI(wrongBranch.args),
+    /CI wait is only valid for a scheduled or manually dispatched run on main/,
+  );
+  assert.equal(wrongBranch.listCalls.length, 0);
+
+  const wrongCiEvent = makeHarness(
+    [[makeWorkflowRun({ event: 'schedule' })]],
+    { context: manualContext },
+  );
+  await assert.rejects(
+    waitForDailyCI({ ...wrongCiEvent.args, timeoutMs: 0 }),
+    /Timed out after 0ms waiting for manually dispatched CI on 2026-10-04; refusing deployment/,
+  );
+  assert.equal(wrongCiEvent.listCalls[0].event, 'workflow_dispatch');
+});
+
+test('rejects a deployment whose GitHub run metadata does not match the current main commit', async () => {
+  const harness = makeHarness([], {
+    deployRun: makeWorkflowRun({ head_sha: 'b'.repeat(40) }),
+  });
+
+  await assert.rejects(
+    waitForDailyCI(harness.args),
+    /Could not verify this schedule deploy run belongs to main in the current repository/,
+  );
+
+  assert.equal(harness.listCalls.length, 0);
+  assert.deepEqual(harness.sleeps, []);
 });
 
 test('fails closed when the matching scheduled CI run completed unsuccessfully', async () => {
