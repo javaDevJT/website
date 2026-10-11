@@ -27,14 +27,18 @@ COPY --from=node-toolchain /usr/local/ /usr/local/
 WORKDIR /app
 COPY pom.xml mvnw ./
 COPY .mvn ./.mvn
+RUN ./mvnw --batch-mode --no-transfer-progress -DskipTests dependency:go-offline
+COPY frontend/package.json frontend/package-lock.json ./frontend/
+RUN cd frontend && npm ci
 COPY frontend ./frontend
 COPY src ./src
 
+FROM backend-build AS backend-check
 # Run the same backend tests and frontend checks used for local verification.
 RUN ./mvnw --batch-mode --no-transfer-progress -DfailIfNoTests=true clean verify && \
     cd frontend && npm audit --audit-level=low
 
-FROM backend-build AS java-runtime
+FROM backend-check AS java-runtime
 # jdeps finds static JDK dependencies. Reflection, charset and service-provider
 # use in Spring/Hibernate/Netty/PDFBox needs the additional modules below.
 RUN mkdir /app/unpacked && cd /app/unpacked && \
@@ -61,7 +65,7 @@ ENV PATH="$JAVA_HOME/bin:$PATH" \
     JAVA_OPTS="-Xms256m -Xmx512m -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -Djava.awt.headless=true"
 WORKDIR /app
 COPY --from=java-runtime /opt/java-runtime /opt/java
-COPY --from=backend-build --chmod=0444 /app/target/website-0.0.1-SNAPSHOT.jar /app/app.jar
+COPY --from=backend-check --chmod=0444 /app/target/website-0.0.1-SNAPSHOT.jar /app/app.jar
 USER 1001:1001
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \

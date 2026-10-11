@@ -73,7 +73,7 @@ jobs:
           target: runtime
           platforms: linux/amd64
           push: false # Push-by-digest is configured in the exporter; tags follow the scan.
-          no-cache-filters: runtime-base,smoke-test,security-scan
+          no-cache-filters: backend-check,runtime-base,smoke-test,security-scan
       - name: Generate SBOM and enforce High/Critical vulnerability gate
         id: container_scan_1
         uses: ./.github/actions/container-security
