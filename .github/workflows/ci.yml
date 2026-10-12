@@ -13,6 +13,8 @@ on:
 permissions:
   contents: read
 
+env:
+  DOCKER_BUILD_RECORD_UPLOAD: "false"
 jobs:
   docker-build:
     name: Build, Test and Scan
