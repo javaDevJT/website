@@ -119,7 +119,7 @@ RUN --mount=type=bind,from=node-toolchain,source=/bin/busybox,target=/tmp/busybo
 
 # Scan the runtime filesystem, including OS packages and nested Java libraries.
 # CI always reruns this stage against fresh vulnerability data.
-FROM aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 AS security-scan
+FROM aquasec/trivy:0.76.0@sha256:2416d1f74045b57274df1a340eee6b510cacd73c66a6ccb8da092b117eb7d222 AS security-scan
 COPY --from=smoke-test / /scan-root/
 RUN trivy rootfs --scanners vuln --exit-code 1 --timeout 10m /scan-root && touch /scan-passed
 
