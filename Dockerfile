@@ -125,6 +125,8 @@ RUN trivy rootfs --scanners vuln --exit-code 1 --timeout 10m /scan-root && touch
 
 # Default builds publish only the application and linked runtime.
 FROM runtime-base AS runtime
+ARG QB_SOURCE_COMMIT=unknown
+ENV QB_SOURCE_COMMIT=${QB_SOURCE_COMMIT}
 # This read-only build mount forces publication to depend on a scan of this
 # exact runtime-base filesystem without shipping the scanner or scan files.
 RUN --mount=type=bind,from=security-scan,source=/scan-passed,target=/scan-passed \

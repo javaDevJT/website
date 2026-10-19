@@ -27,6 +27,7 @@ jobs:
       (github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_sha != '' &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository)
     concurrency:
@@ -34,6 +35,8 @@ jobs:
       cancel-in-progress: false
     runs-on: truenas-website-storage-16g
     timeout-minutes: 40
+    env:
+      TESTED_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     permissions:
       contents: read
       packages: write
@@ -45,7 +48,8 @@ jobs:
       - name: Checkout tested main commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ env.TESTED_SHA }}
+          persist-credentials: false
           fetch-depth: 1
 
       - name: Require successful matching CI before publication
@@ -56,10 +60,9 @@ jobs:
             const { waitForDailyCI } = require('./.github/scripts/wait-for-daily-ci.cjs');
             await waitForDailyCI({ github, context, core });
       - name: Confirm tested commit is current main
-        env:
-          TESTED_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           set -euo pipefail
+          [[ "$TESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$TESTED_SHA"
           git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
           test "$(git rev-parse refs/remotes/origin/main)" = "$TESTED_SHA"
@@ -123,6 +126,8 @@ jobs:
           file: ./Dockerfile
           target: runtime
           no-cache-filters: runtime-base,smoke-test,security-scan
+          build-args: |
+            QB_SOURCE_COMMIT=${{ env.TESTED_SHA }}
           push: false # Push-by-digest is configured in the exporter; tags follow the scan.
           tags: ${{ steps.container_security_1.outputs.repository }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -158,8 +163,6 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Confirm tested commit is current main before publication
-        env:
-          TESTED_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TESTED_SHA"
@@ -171,11 +174,24 @@ jobs:
           SECURITY_IMAGE: ${{ steps.container_security_1.outputs.repository }}@${{ steps.container_build_1.outputs.digest }}
           SECURITY_REPORT_DIRECTORY: ${{ runner.temp }}/container-security/build-1
         run: bash .github/actions/container-security/container-security.sh publish
+      - name: Emit portable build receipt marker
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ env.TESTED_SHA }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          IMAGE_DIGEST: ${{ steps.container_build_1.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'QB_BUILD_RECEIPT_V1 source_sha=%s run_id=%s run_attempt=%s digest=%s\n' \
+            "$SOURCE_SHA" "$RUN_ID" "$RUN_ATTEMPT" "$IMAGE_DIGEST"
 
   cleanup-artifacts:
     name: Remove transient build artifacts
     needs: ["build-and-push"]
-    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ always() && (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'push') }}
     runs-on: truenas-website-storage-8g
     timeout-minutes: 10
     permissions:
