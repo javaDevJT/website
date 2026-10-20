@@ -23,7 +23,10 @@ jobs:
       (github.event.pull_request.head.repo.full_name == github.repository &&
       (github.actor == 'javaDevJT' ||
       (github.actor == 'quarterback-ci[bot]' &&
-      github.event.pull_request.user.id == 341165314)))
+      github.event.pull_request.user.id == 341165314) ||
+      (github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.user.id == 49699333)))
     runs-on: truenas-website-storage-16g
     timeout-minutes: 40
 
@@ -43,7 +46,7 @@ jobs:
             execFileSync(process.execPath, ['--test', '.github/scripts/wait-for-daily-ci.test.cjs'], { stdio: 'inherit' });
 
       - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository
+        if: github.event_name != 'pull_request_target' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]')
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
