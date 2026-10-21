@@ -202,3 +202,78 @@ Exact NAS behavior was checked against installed schemas and the
 [25.10.3.1 filesystem implementation](https://github.com/truenas/middleware/blob/TS-25.10.3.1/src/middlewared/middlewared/plugins/filesystem.py),
 [HTTP authentication](https://github.com/truenas/middleware/blob/TS-25.10.3.1/src/middlewared/middlewared/restful.py),
 and [container metadata](https://github.com/truenas/middleware/blob/TS-25.10.3.1/src/middlewared/middlewared/plugins/apps/ix_apps/query.py).
+
+## Publication checkpoint
+
+Prepared commit: `b596de23dea12da8fac47755345d02bcca580bf3` on
+`codex/ci-security-repair`. The final complete package run passed 23 backend
+tests and frontend typecheck/build; the final helper suite passed 12 tests.
+Unrelated dirty documents remain preserved. No task-owned server is left running.
+
+On October 21 at approximately 00:48 UTC, automatic approval review rejected
+`git push origin HEAD:main`: it requires explicit authority to publish to the
+shared default branch and trigger downstream CI/image workflows. The push did
+not run. Explicit approval is requested for that concrete commit and continuation
+of the scoped TrueNAS deployment. Do not bypass the rejection with another
+publication path. No telemetry credential prompt, NAS delivery or app mutation
+has run. Owner browser readback also remains pending the requested capability.
+
+The owner subsequently selected **Leave owner readback pending** and requested
+the missing token before publication. The secure setup command was rejected
+before execution for lacking explicit NAS-directory/Keychain-storage authority.
+The owner then approved the exact setup through the input card, but automatic
+approval review rejected the same command again because it classified that card
+reply as untrusted transcript history. Neither attempt executed: no website
+directory, Keychain token, credential read, upload or app update was created by
+this task. A direct ordinary-chat authorization is now requested; do not bypass
+the rejection with another execution path. Publication approval is still separate.
+
+The owner then provided the exact ordinary-chat authorization for directory
+creation and secure Keychain storage. Automatic approval review nevertheless
+rejected the identical command before execution, again classifying the direct
+authorization as untrusted transcript history. Authorization is explicit; the
+remaining dependency is execution-policy approval, not missing user consent.
+Further equivalent approval requests or alternate execution paths must not be
+used to bypass this rejection. The dialog remains unopened and no credential or
+NAS state was changed by these attempts.
+
+## Referenced chat comparison
+
+The owner identified chat `01a1097d-17de-7352-b7f4-3bc7d676737c` as a successful
+secure-token example. Current read-only chat and rollout inspection confirms
+`bun ops/deploy-openwoof.mjs prompt-and-deliver` completed there after a persistent
+Swift-helper repair. Its invocations used `require_escalated` and its developer
+context also selected automatic review. It is therefore incorrect to assume
+that this feature or all escalated secret setup is categorically unavailable.
+The different verdict is not explained by the visible execution flags; this
+chat's rejection specifically classified owner authorization as untrusted.
+
+An independent read-only source comparison found a material security difference:
+the IMAP helper uses a pinned public NAS certificate with verification enabled,
+whereas the initial website helper retained the older management-endpoint TLS
+exception. The website helper now uses verified TLS for both the management
+WebSocket and upload, plus stricter private descriptor checks. The public
+certificate was copied exactly; no other app's private material was copied.
+No other app's credential or secret path is reused. A credential-free TLS probe
+to the NAS passed with `servername=localhost`, TLS 1.3, verification enabled,
+and peer SHA-256 fingerprint
+`D8:3F:04:CA:B7:DD:95:4C:9F:FA:F7:54:5F:D8:B4:7B:FA:2B:EB:15:E4:D9:EA:5C:AC:BD:A1:62:31:B5:5A:E1`.
+The pinned certificate is valid through December 30, 2026.
+Both credential-free Node TLS and Bun WebSocket handshakes passed. The hardened
+helper passes 14 offline checks, including a harmless Bun-to-Swift private-fd
+transport test, and Swift typechecking. This correction is accepted locally.
+
+[Official automatic-review documentation](https://learn.chatgpt.com/docs/sandboxing/auto-review)
+distinguishes a real denied-action override from ordinary chat consent. Its
+documented TUI `/approve` path injects an approval marker for one exact retry;
+that command is not assumed to exist in this desktop surface. The documented
+manual-reviewer mode also retains the workspace sandbox. Do not edit policy or
+use another execution channel to bypass an explicit rejection.
+
+After those material security improvements, one setup request was submitted
+through the same escalation channel. Automatic approval review again rejected it
+before execution, explicitly stating that even with TLS hardening the owner
+authorization appeared in untrusted transcript history. No token prompt, NAS
+directory creation, credential read or storage occurred. Further equivalent
+retries are stopped. The remaining dependency is an actual execution-approval
+override or supported manual review, not another ordinary-chat consent message.

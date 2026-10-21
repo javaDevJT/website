@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { X509Certificate } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
   SafeFailure,
@@ -13,6 +18,7 @@ import {
   boundLogEntry,
   buildKeySetpermRequest,
   buildLogEventName,
+  buildManagementWebSocketOptions,
   buildRootOnlyDirectoryMkdirRequest,
   buildRootOnlyDirectorySetpermRequest,
   buildStorageMount,
@@ -25,6 +31,33 @@ import {
   projectInspection,
   redactLogLine,
 } from "./website-openwoof.mjs";
+
+const TRUENAS_CA_FINGERPRINT = "D8:3F:04:CA:B7:DD:95:4C:9F:FA:F7:54:5F:D8:B4:7B:FA:2B:EB:15:E4:D9:EA:5C:AC:BD:A1:62:31:B5:5A:E1";
+
+test("TrueNAS management TLS pins the current localhost CA at the fixed endpoint", async () => {
+  const caPem = await readFile(new URL("./truenas-ca.pem", import.meta.url));
+  const certificate = new X509Certificate(caPem);
+  const now = Date.now();
+
+  assert.equal(certificate.fingerprint256, TRUENAS_CA_FINGERPRINT);
+  assert.equal(certificate.checkHost("localhost"), "localhost");
+  assert.ok(Date.parse(certificate.validFrom) < now, "pinned CA must already be valid");
+  assert.ok(now < Date.parse(certificate.validTo), "pinned CA must not be expired");
+  assert.equal(TARGET.endpoint, "wss://192.168.0.2:8443/api/current");
+  assert.equal(TARGET.origin, "https://192.168.0.2:8443");
+
+  const websocket = buildManagementWebSocketOptions();
+  assert.deepEqual(websocket.tls.ca, caPem);
+  assert.equal(websocket.tls.serverName, "localhost");
+  assert.equal(websocket.tls.rejectUnauthorized, true);
+
+  const upload = buildUploadRequest(new URL("/_upload/", TARGET.origin), "c".repeat(36), 1, "fixture-token-123456");
+  assert.deepEqual(upload.options.ca, caPem);
+  assert.equal(upload.options.servername, "localhost");
+  assert.equal(upload.options.rejectUnauthorized, true);
+  assert.equal(upload.options.agent, false);
+  assert.throws(() => buildUploadRequest(new URL("/_upload/", "https://192.168.0.3:8443"), "c".repeat(36), 1, "fixture-token-123456"), /endpoint guard/);
+});
 
 const SOURCE = "aaf86d9ee76a9c6ae1f18560e707aac178da46e3";
 const DIGEST = `sha256:${"a".repeat(64)}`;
@@ -291,8 +324,65 @@ test("Swift bridge prompts securely, stores add-only, and has no shell-output pr
   assert.doesNotMatch(swift, /SecItemUpdate|osascript|Process\s*\(/);
   assert.match(swift, /--private-fd/);
   assert.match(swift, /secretPipeType == S_IFIFO \|\| secretPipeType == S_IFSOCK/);
+  assert.match(swift, /descriptorFlags = fcntl\(privateSecretFileDescriptor, F_GETFL\)/);
+  assert.match(swift, /accessMode == O_WRONLY \|\| \(isSocket && accessMode == O_RDWR\)/);
+  assert.match(swift, /socketType == SOCK_STREAM/);
+  assert.match(swift, /--test-fd3/);
   assert.match(swift, /FileHandle\(fileDescriptor: privateSecretFileDescriptor, closeOnDealloc: false\)\.write\(bytes\)/);
   assert.doesNotMatch(swift, /FileHandle\.standardOutput\.write\(bytes\)/);
   assert.match(swift, /openwoof\/openwoof\.javadevjt\.tech\/truenas\/website\/production/);
   assert.match(swift, /website-backend/);
+});
+
+test("Swift private fd3 guard transports a fixed synthetic marker through the Bun parent without Keychain access", async context => {
+  if (process.platform !== "darwin") {
+    context.skip("the native AppKit helper runs on macOS");
+    return;
+  }
+  const helper = fileURLToPath(new URL("./website-keychain.swift", import.meta.url));
+  const moduleCache = await mkdtemp(join(tmpdir(), "website-openwoof-swift-modulecache-"));
+  const harness = [
+    'import { spawn } from "node:child_process";',
+    'const child = spawn("swift", ["-module-cache-path", process.env.WEBSITE_SWIFT_MODULECACHE, process.env.WEBSITE_KEYCHAIN_HELPER, "--test-fd3", "--private-fd", "3"], { stdio: ["ignore", "ignore", "pipe", "pipe"] });',
+    "const data = [];",
+    "const errors = [];",
+    'child.stdio[3].on("data", chunk => data.push(Buffer.from(chunk)));',
+    'child.stderr.on("data", chunk => errors.push(Buffer.from(chunk)));',
+    'child.once("error", error => { process.stderr.write(error.message); process.exitCode = 1; });',
+    'child.once("close", (code, signal) => {',
+    '  process.stdout.write(JSON.stringify({ code, signal, marker: Buffer.concat(data).toString("utf8") }));',
+    '  process.stderr.write(Buffer.concat(errors).toString("utf8"));',
+    "  if (code !== 0) process.exitCode = 1;",
+    "});",
+  ].join("\n");
+  let output = [];
+  let errors = [];
+  let result;
+  try {
+    const child = spawn("bun", ["-e", harness], {
+      env: {
+        ...process.env,
+        WEBSITE_KEYCHAIN_HELPER: helper,
+        WEBSITE_SWIFT_MODULECACHE: moduleCache,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    child.stdout.on("data", chunk => output.push(Buffer.from(chunk)));
+    child.stderr.on("data", chunk => errors.push(Buffer.from(chunk)));
+    const closed = new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    });
+    const timeout = setTimeout(() => child.kill("SIGKILL"), 30_000);
+    result = await closed;
+    clearTimeout(timeout);
+  } finally {
+    await rm(moduleCache, { recursive: true, force: true });
+  }
+  assert.equal(result.code, 0, Buffer.concat(errors).toString("utf8") || "Bun fd3 harness should exit successfully");
+  assert.equal(result.signal, null);
+  const report = JSON.parse(Buffer.concat(output).toString("utf8"));
+  assert.equal(report.code, 0, Buffer.concat(errors).toString("utf8") || "Swift fd3 helper should exit successfully");
+  assert.equal(report.signal, null);
+  assert.equal(report.marker, "synthetic-website-keychain-fd3");
 });

@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { spawn as spawnProcess } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { request as httpsRequest } from "node:https";
 import { basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +26,7 @@ export const TARGET = Object.freeze({
 });
 
 const KEYCHAIN_HELPER = fileURLToPath(new URL("./website-keychain.swift", import.meta.url));
+const TRUENAS_CA = readFileSync(new URL("./truenas-ca.pem", import.meta.url));
 const REQUEST_TIMEOUT_MS = 45_000;
 const FILE_JOB_TIMEOUT_MS = 180_000;
 const APP_JOB_TIMEOUT_MS = 15 * 60_000;
@@ -389,9 +391,19 @@ export function buildUploadBody(path, bytes, boundary = randomBytes(18).toString
   return { boundary, body };
 }
 
+export function buildManagementWebSocketOptions() {
+  return {
+    tls: {
+      ca: Buffer.from(TRUENAS_CA),
+      serverName: "localhost",
+      rejectUnauthorized: true,
+    },
+  };
+}
+
 class TrueNASClient {
   constructor() {
-    this.socket = new WebSocket(TARGET.endpoint, { tls: { rejectUnauthorized: false } });
+    this.socket = new WebSocket(TARGET.endpoint, buildManagementWebSocketOptions());
     this.nextId = 1;
     this.pending = new Map();
     this.listeners = new Set();
@@ -642,6 +654,10 @@ export function buildUploadRequest(url, boundary, contentLength, token) {
     url: url.href,
     options: {
       method: "POST",
+      ca: Buffer.from(TRUENAS_CA),
+      servername: "localhost",
+      rejectUnauthorized: true,
+      agent: false,
       headers: {
         authorization: `Token ${token}`,
         "content-type": `multipart/form-data; boundary=${boundary}`,
@@ -666,8 +682,6 @@ function postUpload(url, boundary, body, token) {
     try {
       request = httpsRequest(new URL(requestSpec.url), {
         ...requestSpec.options,
-        rejectUnauthorized: false,
-        agent: false,
       }, response => {
         if (response.statusCode < 200 || response.statusCode >= 300) {
           response.resume(); finish(reject, new SafeFailure("key upload HTTP", { ambiguous: true })); return;

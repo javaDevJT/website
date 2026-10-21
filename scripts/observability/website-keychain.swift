@@ -23,6 +23,11 @@ enum WebsiteKeychain {
         case ["read-truenas-api", "--private-fd", "3"]:
             requirePrivateSecretPipe()
             emit(service: trueNASService, account: trueNASAccount)
+        case ["--test-fd3", "--private-fd", "3"]:
+            requirePrivateSecretPipe()
+            let marker = Data("synthetic-website-keychain-fd3".utf8)
+            FileHandle(fileDescriptor: privateSecretFileDescriptor, closeOnDealloc: false).write(marker)
+            exit(EXIT_SUCCESS)
         default:
             fail("usage")
         }
@@ -36,6 +41,21 @@ enum WebsiteKeychain {
         let secretPipeType = secretPipe.st_mode & S_IFMT
         guard secretPipeType == S_IFIFO || secretPipeType == S_IFSOCK else {
             fail("private-channel-required")
+        }
+        let descriptorFlags = fcntl(privateSecretFileDescriptor, F_GETFL)
+        let accessMode = descriptorFlags & O_ACCMODE
+        let isSocket = secretPipeType == mode_t(S_IFSOCK)
+        guard descriptorFlags >= 0,
+              accessMode == O_WRONLY || (isSocket && accessMode == O_RDWR) else {
+            fail("private-channel-required")
+        }
+        if isSocket {
+            var socketType: Int32 = 0
+            var socketTypeLength = socklen_t(MemoryLayout<Int32>.size)
+            guard getsockopt(privateSecretFileDescriptor, SOL_SOCKET, SO_TYPE, &socketType, &socketTypeLength) == 0,
+                  socketType == SOCK_STREAM else {
+                fail("private-channel-required")
+            }
         }
         for standardDescriptor in [STDOUT_FILENO, STDERR_FILENO] {
             var standardOutput = Darwin.stat()
