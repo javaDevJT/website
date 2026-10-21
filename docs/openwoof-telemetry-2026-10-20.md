@@ -406,3 +406,35 @@ Focused local checks passed after the final source change:
 The initial localhost test attempt was blocked by the filesystem/network
 sandbox before its server bound; the authorized rerun completed. This local
 fixture and package check do not establish production telemetry acceptance.
+
+The reviewed fix was committed as
+`3ca0b8cafeaf436b1771dcebd9701f1223d1c0ba` and pushed to main under the owner's
+approved continuation. Its exact matching
+[CI run 39614953896](https://github.com/javaDevJT/website/actions/runs/39614953896),
+attempt 1, was queued at 14:13:23 UTC. No successful image/publication or new
+runtime is claimed while that run is pending.
+
+### Probe permission failure and correction
+
+CI `39614953896`, attempt 1, failed its build/runtime check at 14:18:15 UTC and
+settled failure at 14:20:45 UTC. All 23 application tests passed. The log confirms
+that the probe compiled and copied successfully, then UID 1001 received
+`ClassNotFoundException: WebsiteHealthcheck` at the probe invocation. The SBOM
+gate was skipped, so this attempt produced no qualifying scan result.
+
+The file-only `COPY --chmod=0444` had created a new parent directory. Upstream
+[BuildKit issue 2414](https://github.com/moby/buildkit/issues/2414) documents that
+non-default copy modes can also apply to newly created parents, making mode
+0444 unsuitable for directory traversal. The class is now copied directly into
+the existing `/app` directory, which already serves the application jar to UID
+1001. Both health-check invocations use `-cp /app`, and smoke explicitly checks
+that `/app/WebsiteHealthcheck.class` is readable after switching to UID 1001.
+
+A separate rootless `linux/amd64` container check compiled with the exact pinned
+Temurin 25 image, created a `java.base`-only linked runtime, reproduced the
+corrected file copy, and ran as UID/GID 1001. It verified a silent exit 1 with no
+server, then exit 0 against an actual loopback HTTP 200 server. The initial
+fixture attempt lacked Alpine's optional HTTP-server applet; after adding that
+test-only package the fixture passed. No test-server package enters production.
+Independent review found no stale classpath or copy-path reference. This remains
+preparation evidence; another complete CI image smoke/scan is required.

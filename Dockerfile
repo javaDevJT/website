@@ -68,12 +68,12 @@ ENV PATH="$JAVA_HOME/bin:$PATH" \
     JAVA_OPTS="-Xms256m -Xmx512m -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -Djava.awt.headless=true"
 WORKDIR /app
 COPY --from=java-runtime /opt/java-runtime /opt/java
-COPY --from=java-runtime --chmod=0444 /opt/website-healthcheck/WebsiteHealthcheck.class /app/healthcheck/WebsiteHealthcheck.class
+COPY --from=java-runtime --chmod=0444 /opt/website-healthcheck/WebsiteHealthcheck.class /app/WebsiteHealthcheck.class
 COPY --from=backend-check --chmod=0444 /app/target/website-0.0.1-SNAPSHOT.jar /app/app.jar
 USER 1001:1001
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
-  CMD ["/opt/java/bin/java", "-Xms8m", "-Xmx32m", "-XX:+UseSerialGC", "-XX:ActiveProcessorCount=1", "-cp", "/app/healthcheck", "WebsiteHealthcheck"]
+  CMD ["/opt/java/bin/java", "-Xms8m", "-Xmx32m", "-XX:+UseSerialGC", "-XX:ActiveProcessorCount=1", "-cp", "/app", "WebsiteHealthcheck"]
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
 
 # Run the packaged app as the production UID to verify the linked Java modules,
@@ -89,6 +89,7 @@ RUN --mount=type=bind,from=node-toolchain,source=/bin/busybox,target=/tmp/busybo
     test ! -e /usr/bin/ssl_client; \
     test ! -e /usr/bin/curl; \
     test ! -e /usr/lib/libcurl.so.4; \
+    test -r /app/WebsiteHealthcheck.class; \
     test ! -e /opt/java/bin/javac; \
     java -version; \
     java $JAVA_OPTS -jar /app/app.jar > /tmp/website-smoke.log 2>&1 & \
@@ -104,7 +105,7 @@ RUN --mount=type=bind,from=node-toolchain,source=/bin/busybox,target=/tmp/busybo
     done; \
     if [ "$attempt" -ge 60 ]; then cat /tmp/website-smoke.log; exit 1; fi; \
     grep -Eq '"status"[[:space:]]*:[[:space:]]*"UP"' /tmp/website-health.json; \
-    /opt/java/bin/java -Xms8m -Xmx32m -XX:+UseSerialGC -XX:ActiveProcessorCount=1 -cp /app/healthcheck WebsiteHealthcheck; \
+    /opt/java/bin/java -Xms8m -Xmx32m -XX:+UseSerialGC -XX:ActiveProcessorCount=1 -cp /app WebsiteHealthcheck; \
     wget -T 5 -qO /tmp/website-client-info.json http://127.0.0.1:8080/api/client/info; \
     grep -Eq '"hostname"[[:space:]]*:[[:space:]]*"javadevjt[.]tech"' /tmp/website-client-info.json; \
     grep -Eq '"username"[[:space:]]*:[[:space:]]*"visitor"' /tmp/website-client-info.json; \
