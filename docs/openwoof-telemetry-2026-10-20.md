@@ -45,12 +45,12 @@ The primary retains final judgment and integrates only evidence-backed results.
 
 | Requirement | Evidence required | Status |
 | --- | --- | --- |
-| Actual target/configuration | Current TrueNAS app/service/container/image, network and deployment workflow | verified read-only; new runtime pending |
+| Actual target/configuration | Current TrueNAS app/service/container/image, network and deployment workflow | verified; failed enabled runtime restored with telemetry off; corrected release pending |
 | Original application logging | Logger path, representative safe original body/severity/time/scope/fields/exception before and after complete processing | local fixture passed; deployed pending |
 | Meaningful traces | Real safe application work and dependencies; valid context and error semantics | local fixture passed; deployed pending |
 | Real metrics | Instrument names, kind/unit/temporality and persisted points; no cumulative double counting | local fixture passed; persisted points pending |
 | Privacy and resilience | Specific redaction, original logging retained, bounded queues/retries/cardinality, export failure isolation | reviewed and local fixture passed; runtime pending |
-| Secret custody | Exact deterministic Keychain identifiers, supported encrypted NAS delivery, read-only runtime secret input, no value disclosure | local Keychain saved and metadata verified; NAS delivery pending |
+| Secret custody | Exact deterministic Keychain identifiers, supported encrypted NAS delivery, read-only runtime secret input, no value disclosure | Keychain and NAS delivery complete; UID/GID 1001 mode 0400 verified; read-only configuration verified, effective kernel flags unobserved |
 | Deployed chain | Current source → successful CI → digest → runtime → exporter → persisted OpenWoof evidence | pending |
 | Owner readback | Existing authorized Authentik owner session; ingest key is not query authority | intentionally pending per owner |
 
@@ -438,3 +438,198 @@ fixture attempt lacked Alpine's optional HTTP-server applet; after adding that
 test-only package the fixture passed. No test-server package enters production.
 Independent review found no stale classpath or copy-path reference. This remains
 preparation evidence; another complete CI image smoke/scan is required.
+
+The reviewed correction was pushed as
+`d9148ff9650c145434bfcd225481894c6d65cbff`. Its exact
+[CI run 39616596851](https://github.com/javaDevJT/website/actions/runs/39616596851),
+attempt 1, failed before checkout at 14:30:44 UTC. Runner
+`truenas-website-storage-16g-c9372f98` reported that the mandatory
+`/opt/ci-storage/ci-storage-policy-job-start.js` hook exceeded its 300-second
+deadline. No source build, tests or scans ran in this attempt. Missing checkout
+files and the missing native-start baseline during later cleanup are downstream
+failures, not evidence of an application defect. The storage hook and unrelated
+infrastructure remain unchanged; a bounded same-source retry is the next step.
+
+The first job-scoped retry request was rejected while the original workflow was
+still finalizing; read-only reconciliation confirmed attempt 1 remained the only
+attempt. After the run settled at 14:37:14 UTC, one `--failed` rerun request was
+accepted for the same source/run. This reuses the required hooks and all gates;
+no infrastructure guard was disabled or modified.
+
+Attempt 2 passed the mandatory runner setup and checkout and reached the full
+build/runtime check. A concurrent artifact-janitor workflow refused to clean an
+active rerun; that separate workflow is not source or scan evidence.
+
+A fresh read-only website configuration check at approximately 14:41 UTC found
+`run_as_custom_user=false`, `privileged=false`, `host_network=false`, and no
+command or entrypoint override. Thus the app retains its image's UID/GID-1001
+execution contract. This check read no environment values or ingest credential.
+
+CI `39616596851` attempt 2 completed the full build/test/linked-runtime/Trivy step
+successfully at 14:47:07 UTC. The separate SBOM/Grype High/Critical gate then
+started; this checkpoint is not yet evidence of a successful overall CI or
+published image.
+
+Completed-job evidence for attempt 2 confirms 23 tests, zero failures/errors/
+skips, and Trivy reporting zero vulnerabilities. The retained
+[Grype summary artifact 12354144472](https://github.com/javaDevJT/website/actions/runs/39616596851/artifacts/12354144472)
+binds full revision `d9148ff9650c145434bfcd225481894c6d65cbff` and platform
+`linux/amd64`, with `highCriticalCount: 0` and `findings: []`. These are successful
+CI build-job results; registry publication and runtime adoption remain separate.
+
+CI `39616596851` attempt 2 fully settled **success**, including cleanup at
+14:57:57 UTC. The exact matching
+[production publication run 39621542367](https://github.com/javaDevJT/website/actions/runs/39621542367)
+then started. Its image job `119296035492` passed setup and the current-main
+identity gate and entered build/push at approximately 15:00 UTC. Publication
+must still pass its own scan and provide the immutable digest/receipt.
+
+The production image job succeeded. Its
+[scan artifact 12355847389](https://github.com/javaDevJT/website/actions/runs/39621542367/artifacts/12355847389)
+binds full source `d9148ff9650c145434bfcd225481894c6d65cbff`, platform
+`linux/amd64`, and zero High/Critical findings (`findings: []`). Scan and storage
+checks succeeded at 15:10:55 UTC; current-main validation, release tagging and
+the portable receipt marker succeeded by 15:11:02 UTC. The immutable image is:
+
+`ghcr.io/javadevjt/website@sha256:1503012ccfb80167fdf38f041d4f2f2404ece43b9d4f117b1c56359995a2fddd`
+
+The read-only deployment dry-run passed for that exact source/digest. The live
+catalogue 1.4.4 website still uses the guarded `a1a24c3f...` baseline, with no
+environment, mounts, command or entrypoint overrides. Proposed delivery changes
+only the image, eight telemetry/identity environment entries, and the single
+read-only file mount at `/run/secrets/openwoof-ingest-key`; the host file is
+UID/GID 1001 mode 0400 under mode-0700 app-owned directories. No ingest key was
+read or uploaded by the dry-run. Workflow cleanup and the signed receipt remain
+separate pending gates before applying this configuration.
+
+Publication attempt 1's cleanup failed at 15:17:15 UTC on the same mandatory
+storage-hook 300-second deadline, despite the successful image job. Its receipt
+publisher skipped; no accepted receipt was produced. A cleanup-only retry made
+publication attempt 2 successful at 15:20:14 UTC, reusing the original image job.
+However, the copied job log still carries `run_attempt=1`, while the receipt
+verifier requires a marker bound to the verified current attempt. The primary
+missed that constraint before choosing the cleanup-only retry. It does not
+qualify as a valid attempt-2 receipt and the verifier remains unchanged.
+
+A fresh image-job rerun, including dependent cleanup, was then accepted for the
+same source as publication attempt 3. This must generate a fresh matching marker,
+pass the gates and produce an accepted receipt. The image digest may change;
+the selected runtime digest must follow that new verified publication. No app
+update or ingest-key delivery has been attempted.
+
+The actual attempt-2 receipt producer
+[run 39624705376](https://github.com/javaDevJT/website/actions/runs/39624705376)
+failed at 15:23:00 UTC before marker validation: `GitHub check runs do not cover
+every successful source job.` Its artifact list is empty. The stale-marker
+condition above is an additional confirmed incompatibility; it was not the
+first error emitted by this producer. Publication attempt 3 passed setup and
+entered its fresh image build at 15:24:30 UTC. The primary also assigned a bounded
+read-only CI-platform source investigation of the repeated storage-hook timeout;
+no shared infrastructure changes are authorized or performed by this task.
+
+Read-only platform investigation found that the protected 300-second deadline
+wraps the native start hook, which polls `/v1/usage` while storage-policy
+admission is pending. The cache bootstrap has a separate non-fatal 17-second
+bound. A start baseline is captured only after admission resolves, explaining
+the subsequent missing-baseline 404 when start times out. Source references:
+[storage runtime](/Users/joshuaterk/Documents/ChatGPT/Quarterback-ci/output/runner-source-20261020/storage_runtime.go:71),
+[native storage client](/Users/joshuaterk/Documents/ChatGPT/Quarterback-ci/output/runner-source-20261020/storage-client.mjs:933),
+and [policy binding](/Users/joshuaterk/Documents/ChatGPT/Quarterback-ci/output/runner-source-20261020/storage_policy_runtime.go:911).
+
+An existing [platform incident record](/Users/joshuaterk/Documents/ChatGPT/Quarterback-ci/output/qualification/shared-runner-admission-2026-10-21.md:21)
+shows SDK/GitHub REST job-binding mismatches leading to pending admission and
+the same timeout. That supports a shared failure path but does not establish the
+website-specific mismatched field; no controller logs or shared runtime were
+queried by this investigation. Existing ownership notes reserve the admission
+correction to the runner owner. This task leaves that ownership and the
+fail-closed policy intact.
+
+Publication attempt 3's fresh image job `119307591797` completed success at
+15:35:29 UTC. Its marker now correctly binds run `39621542367`, attempt **3**,
+source `d9148ff9650c145434bfcd225481894c6d65cbff`, and this selected image:
+
+`ghcr.io/javadevjt/website@sha256:a5b9571006e5517b86ed024c08c9cf114f8e78b6562075ba4b8dba8291dbd611`
+
+The [attempt-3 scan artifact 12358441278](https://github.com/javaDevJT/website/actions/runs/39621542367/artifacts/12358441278)
+independently binds that source, digest and `linux/amd64`, with zero High/Critical
+findings. This replaces the earlier publication digest as the runtime candidate;
+neither image has been deployed by this task. A new read-only dry-run for the
+selected digest passed against the unchanged app baseline. Ingest-key delivery
+is still held for matching receipt acceptance after workflow cleanup.
+
+Publication run `39621542367` attempt 3 then fully settled **success**: cleanup
+job `119314881455` passed on runner
+`truenas-website-storage-8g-90d8d18f`. The matching receipt producer
+[run 39627368753](https://github.com/javaDevJT/website/actions/runs/39627368753)
+was queued at 15:37:36 UTC. Its actual receipt/acceptance is the remaining
+publication evidence; earlier skipped/failed producers do not qualify.
+
+Receipt producer `39627368753` succeeded at 15:39:34 UTC. Its verified inputs
+were publication run `39621542367`, attempt 3, source `d9148ff...`, and selected
+digest `a5b957...dbd611`. Code inspection and the successful submission step
+establish signed-receipt endpoint acceptance (the helper requires HTTP 200/201).
+The response body is intentionally unlogged and no GitHub receipt artifact is
+emitted; an independent Quarterback persisted-record ID/readback was not
+observed. This does not establish OpenWoof telemetry persistence.
+
+The approved website-only apply command started at 15:41:22 UTC for the full
+selected source/digest. It remains one-shot: any mutation ambiguity must be
+reconciled read-only before another operation. No key value is logged or passed
+in command arguments.
+
+The initial delivery completed credential storage and submitted app-update job
+`30687`. The helper then reported an unavailable job-status read and exited.
+Read-only reconciliation confirmed that **the job succeeded**; no upload or
+update was replayed. The NAS credential file is UID/GID 1001, mode 0400, beneath
+mode-0700 app-owned directories. Its bytes were not read for verification.
+
+The updated image failed actual telemetry-enabled startup. Bounded container
+logs at 15:46:28 UTC show `NoClassDefFoundError` and `ClassNotFoundException` for
+`io.opentelemetry.proto.resource.v1.Resource` while creating `otlpMeterRegistry`.
+The app was restarting rather than healthy. The POM's direct test-scoped
+`opentelemetry-proto` dependency suppressed Micrometer's transitive runtime
+scope, so source tests had the class but the packaged application did not.
+The earlier image smoke used telemetry disabled and missed this failure.
+Passing CI, publication and receipt acceptance above therefore do **not**
+constitute runtime telemetry acceptance.
+
+To restore availability, job `30703` changed only
+`OPENWOOF_TELEMETRY_ENABLED` to `false`. It succeeded; the website returned HTTP
+200 with actuator status `UP` and exact source
+`d9148ff9650c145434bfcd225481894c6d65cbff`. The current restored container is
+`374b277663b2fd933947ee763ce877f58d23b5a42e4d7692ad0935ad141be641`.
+The image, identity settings, protected credential file and mount remain in
+place for reuse. No credential was rotated, revoked, overwritten or re-uploaded.
+The packaging fix must pass a new telemetry-enabled packaged-runtime check,
+publication gates and a fresh accepted receipt before another app promotion.
+
+The corrected POM removes the redundant direct test-scoped proto dependency;
+Micrometer now supplies the compatible `1.10.0-alpha` runtime dependency, present
+in `BOOT-INF/lib`. `./mvnw --batch-mode --no-transfer-progress clean verify`
+passed all 23 tests. A separate `sh scripts/telemetry-runtime-smoke.sh` passed:
+it starts through the packaged JAR's `PropertiesLauncher`, with only one
+temporary test helper added outside the JAR, and delivers all three OTLP protobuf
+signals to a loopback receiver while reading real portfolio content. Its
+test-only exporter override and harmless fixture key do not enter the runtime
+JAR or final image and do not contact OpenWoof.
+
+The final linked-JRE Docker smoke also now enables telemetry with a UID-1001
+mode-0400 fixture file and full fixture SHA. `RUN --network=none` prevents its
+production-configured exporter from reaching OpenWoof. It retains the actual
+health, content, PDF, assets and production-UID checks; CI must execute this
+container stage before publication. These two checks cover the missed packaged
+dependency and native runtime startup conditions separately.
+
+The catalogue's stored mount has `read_only=true`, but this TrueNAS runtime's
+`volume_mounts[].mode` is an empty string. That metadata does not prove effective
+kernel mount flags. The [25.10 API schema](https://api.truenas.com/v25.10.0/api_methods_app.query.html)
+and [documented shell UI](https://www.truenas.com/docs/scale/25.10/scaleuireference/apps/)
+do not establish a supported programmatic shell handshake or default exec UID.
+No guessed shell protocol or host-root command was used. Actual kernel flag
+verification remains unobserved; it must not be inferred from the blank mode.
+
+The independent packaging review found no blocking issue in dependency scope,
+packaged-classpath isolation, test-helper exclusion, external-network isolation
+or cleanup. `git diff --check` passed. The corrected release will retain all
+existing CI/security/receipt gates and reuse the already delivered credential
+through a guarded configuration-only promotion; initial delivery is not replayed.

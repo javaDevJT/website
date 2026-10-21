@@ -32,10 +32,12 @@ COPY frontend/package.json frontend/package-lock.json ./frontend/
 RUN cd frontend && npm ci
 COPY frontend ./frontend
 COPY src ./src
+COPY scripts/telemetry-runtime-smoke.sh ./scripts/telemetry-runtime-smoke.sh
 
 FROM backend-build AS backend-check
 # Run the same backend tests and frontend checks used for local verification.
 RUN ./mvnw --batch-mode --no-transfer-progress -DfailIfNoTests=true clean verify && \
+    sh ./scripts/telemetry-runtime-smoke.sh && \
     cd frontend && npm audit --audit-level=low
 
 FROM backend-check AS java-runtime
@@ -79,11 +81,15 @@ ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
 # Run the packaged app as the production UID to verify the linked Java modules,
 # PDF extraction, content parsing, and the actual generated web assets.
 FROM runtime-base AS smoke-test
-RUN --mount=type=bind,from=node-toolchain,source=/bin/busybox,target=/tmp/busybox \
+RUN --network=none --mount=type=bind,from=node-toolchain,source=/bin/busybox,target=/tmp/busybox \
     set -eu; \
     /tmp/busybox mkdir /tmp/website-smoke-tools; \
     /tmp/busybox --install -s /tmp/website-smoke-tools; \
     export PATH="/tmp/website-smoke-tools:$PATH"; \
+    fixture_key=/tmp/website-smoke-telemetry.key; \
+    app_pid=; \
+    cleanup() { if [ -n "$app_pid" ]; then kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi; /tmp/busybox rm -f "$fixture_key"; /tmp/busybox rm -rf /tmp/website-smoke-tools; }; \
+    trap cleanup EXIT; \
     test "$(id -u)" = 1001; \
     test ! -e /bin/busybox; \
     test ! -e /usr/bin/ssl_client; \
@@ -91,11 +97,17 @@ RUN --mount=type=bind,from=node-toolchain,source=/bin/busybox,target=/tmp/busybo
     test ! -e /usr/lib/libcurl.so.4; \
     test -r /app/WebsiteHealthcheck.class; \
     test ! -e /opt/java/bin/javac; \
+    umask 077; \
+    printf '%s' 'packaged-linked-runtime-smoke-fixture-key' > "$fixture_key"; \
+    chmod 0400 "$fixture_key"; \
+    test "$(stat -c %a "$fixture_key")" = 400; \
+    test "$(stat -c %u "$fixture_key")" = 1001; \
+    export OPENWOOF_TELEMETRY_ENABLED=true; \
+    export OPENWOOF_INGEST_KEY_FILE="$fixture_key"; \
+    export QB_SOURCE_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; \
     java -version; \
     java $JAVA_OPTS -jar /app/app.jar > /tmp/website-smoke.log 2>&1 & \
     app_pid=$!; \
-    cleanup() { kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; /tmp/busybox rm -rf /tmp/website-smoke-tools; }; \
-    trap cleanup EXIT; \
     attempt=0; \
     while [ "$attempt" -lt 60 ]; do \
       if ! kill -0 "$app_pid" 2>/dev/null; then cat /tmp/website-smoke.log; exit 1; fi; \
