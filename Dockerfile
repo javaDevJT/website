@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Java and Node are build tools only; the published image contains a jlink runtime.
-FROM node:26.10.0-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80 AS node-toolchain
+FROM node:26.12.0-alpine@sha256:6f08a523443ddedf52941874c203475b0ad503e859ad70cb26ab8be9a517dbd5 AS node-toolchain
 
 FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS zlib-build
 RUN apk add --no-cache alpine-sdk ca-certificates dash=0.5.13.1-r2 && \
