@@ -336,3 +336,73 @@ private Swift pipe works. No new NAS staging or upload has been performed.
 The 23-test application package result remains applicable to unchanged Java/UI
 source. Publication is still awaiting explicit approval; the token-first request
 has now been completed.
+
+The corrected custody/delivery preparation is committed as `06c9214`. Upstream
+main advanced to `a940867` with the independent receipt-503 retry fix; that change
+was merged without conflict, producing release candidate
+`ecfad2a28f3aa85e3b189c5c20bd8ba50d325e5e`. The receipt script syntax check and
+diff checks passed. Unrelated dirty maintenance notes remain unchanged.
+The owner is being asked to authorize publication of this concrete candidate
+and continuation through gated CI/image publication and UID-1001 app delivery.
+No NAS staging or key upload is claimed at this checkpoint.
+
+The owner approved publication and continuation. `ecfad2a` was pushed to main;
+matching [CI run 39611203872](https://github.com/javaDevJT/website/actions/runs/39611203872)
+started for that full SHA. The nonsecret `prepare-delivery` step then completed:
+`/mnt/Lake/website-openwoof` is verified UID/GID 1001, mode 0700, trivial ACL;
+the `secrets` child remains absent and no ingest-key read/upload occurred.
+The new application image and runtime update remain gated on CI/publication.
+
+### Candidate CI failure retained (2026-10-21)
+
+CI run `39611203872`, attempt 1, completed **failure** for full source
+`ecfad2a28f3aa85e3b189c5c20bd8ba50d325e5e`. Its backend tests / linked-runtime
+step passed at 13:56:53 UTC; the separate SBOM High/Critical gate failed at
+14:00:26 UTC. Grype exited 2 with one High finding: `CVE-2026-92392` in Alpine
+`curl 8.22.0-r0`, from `/lib/apk/db/installed`, platform `linux/amd64`.
+The retained [security artifact](https://github.com/javaDevJT/website/actions/runs/39611203872/artifacts/12351871141)
+reports `highCriticalCount: 1`. This candidate does not qualify for publication
+or deployment. A later passing run must remain distinct from this attempt.
+
+The downstream [production workflow](https://github.com/javaDevJT/website/actions/runs/39613309154)
+reported success only for cleanup; its image-build/publication job was skipped
+after failed CI. No image or TrueNAS runtime update is inferred from that overall
+workflow conclusion. The security threshold is unchanged. Vendor remediation
+is being investigated before another candidate is prepared. The NAS secrets
+child remains absent; the production ingest key has not been delivered.
+
+### Curl removal candidate
+
+The [curl vendor advisory](https://curl.se/docs/CVE-2026-92392.html) identifies
+8.23.0 as fixed. The [Alpine v3.24 amd64 index](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/)
+still supplied 8.22.0-r0 when checked on October 21. Curl was used only for the
+container health probe and its smoke check. The runtime package list now omits
+curl; the pinned stable base and scan threshold remain unchanged.
+
+`docker/healthcheck/WebsiteHealthcheck.java` replaces that probe using
+`HttpURLConnection` in `java.base`. It is compiled by the existing JDK 25 build
+stage and runs with the linked runtime as UID 1001, with an 8–32 MiB heap. The
+fixed numeric loopback URL bypasses proxies, rejects redirects, and succeeds
+only on HTTP 200. Connect/read timeouts of 500/1500 ms leave room within Docker's
+three-second outer timeout. The existing application JSON `status=UP` smoke
+assertion remains; smoke now also runs the exact production probe and checks
+that neither the curl executable nor libcurl shared library is present.
+
+Focused local checks passed after the final source change:
+
+- Compiled with `javac --release 25`; `jdeps` reports only `java.base`.
+- The probe returned 0 for HTTP 200 with a broken proxy configured, and 1 for
+  HTTP 500, HTTP 302, a delayed response (1.56 seconds), and a refused connection.
+  It requested only `/actuator/health` and emitted no stdout/stderr in every case.
+- A clean rootless Podman transaction using the pinned Alpine image and the
+  remaining package list, explicitly on `linux/amd64`, found both `curl` and
+  `libcurl` absent. The temporary container was automatically removed.
+- Independent source review checked the probe, image copy, UID, module and smoke
+  wiring. The compilation output directory is created explicitly.
+- `git diff --check` passed. The prior 23-test CI application step passed for
+  unchanged application/UI source; this replacement still requires a new full
+  image smoke check, Trivy scan and Grype gate before release.
+
+The initial localhost test attempt was blocked by the filesystem/network
+sandbox before its server bound; the authorized rerun completed. This local
+fixture and package check do not establish production telemetry acceptance.

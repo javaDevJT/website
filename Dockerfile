@@ -39,9 +39,12 @@ RUN ./mvnw --batch-mode --no-transfer-progress -DfailIfNoTests=true clean verify
     cd frontend && npm audit --audit-level=low
 
 FROM backend-check AS java-runtime
+COPY docker/healthcheck/WebsiteHealthcheck.java /tmp/WebsiteHealthcheck.java
 # jdeps finds static JDK dependencies. Reflection, charset and service-provider
 # use in Spring/Hibernate/Netty/PDFBox needs the additional modules below.
-RUN mkdir /app/unpacked && cd /app/unpacked && \
+RUN mkdir -p /opt/website-healthcheck && \
+    javac -d /opt/website-healthcheck /tmp/WebsiteHealthcheck.java && \
+    mkdir /app/unpacked && cd /app/unpacked && \
     jar -xf /app/target/website-0.0.1-SNAPSHOT.jar && \
     modules="$(jdeps --ignore-missing-deps --multi-release 25 --recursive \
       --print-module-deps --class-path 'BOOT-INF/lib/*' BOOT-INF/classes)" && \
@@ -56,7 +59,7 @@ COPY --from=zlib-build /home/builder/.abuild/*.rsa.pub /etc/apk/keys/
 # BuildKit stores snapshots on tmpfs; exported OCI layers preserve this APK DB.
 RUN apk --root-tmpfs=no upgrade --no-cache && \
     apk --root-tmpfs=no add --no-cache /tmp/zlib.apk /tmp/dash.apk && rm /tmp/zlib.apk /tmp/dash.apk && \
-    apk --root-tmpfs=no add --no-cache ca-certificates libstdc++ fontconfig font-dejavu curl && \
+    apk --root-tmpfs=no add --no-cache ca-certificates libstdc++ fontconfig font-dejavu && \
     addgroup -g 1001 -S spring && \
     adduser -u 1001 -S spring -G spring && \
     apk --root-tmpfs=no del --no-cache busybox busybox-binsh ssl_client
@@ -65,11 +68,12 @@ ENV PATH="$JAVA_HOME/bin:$PATH" \
     JAVA_OPTS="-Xms256m -Xmx512m -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -Djava.awt.headless=true"
 WORKDIR /app
 COPY --from=java-runtime /opt/java-runtime /opt/java
+COPY --from=java-runtime --chmod=0444 /opt/website-healthcheck/WebsiteHealthcheck.class /app/healthcheck/WebsiteHealthcheck.class
 COPY --from=backend-check --chmod=0444 /app/target/website-0.0.1-SNAPSHOT.jar /app/app.jar
 USER 1001:1001
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
-  CMD ["/usr/bin/dash", "-ec", "test \"$(curl --fail --silent --max-time 2 --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/actuator/health)\" = 200"]
+  CMD ["/opt/java/bin/java", "-Xms8m", "-Xmx32m", "-XX:+UseSerialGC", "-XX:ActiveProcessorCount=1", "-cp", "/app/healthcheck", "WebsiteHealthcheck"]
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
 
 # Run the packaged app as the production UID to verify the linked Java modules,
@@ -83,6 +87,8 @@ RUN --mount=type=bind,from=node-toolchain,source=/bin/busybox,target=/tmp/busybo
     test "$(id -u)" = 1001; \
     test ! -e /bin/busybox; \
     test ! -e /usr/bin/ssl_client; \
+    test ! -e /usr/bin/curl; \
+    test ! -e /usr/lib/libcurl.so.4; \
     test ! -e /opt/java/bin/javac; \
     java -version; \
     java $JAVA_OPTS -jar /app/app.jar > /tmp/website-smoke.log 2>&1 & \
@@ -98,9 +104,7 @@ RUN --mount=type=bind,from=node-toolchain,source=/bin/busybox,target=/tmp/busybo
     done; \
     if [ "$attempt" -ge 60 ]; then cat /tmp/website-smoke.log; exit 1; fi; \
     grep -Eq '"status"[[:space:]]*:[[:space:]]*"UP"' /tmp/website-health.json; \
-    health_status="$(curl --fail --silent --max-time 5 --output /tmp/website-curl-health.json --write-out '%{http_code}' http://127.0.0.1:8080/actuator/health)"; \
-    test "$health_status" = 200; \
-    grep -Eq '"status"[[:space:]]*:[[:space:]]*"UP"' /tmp/website-curl-health.json; \
+    /opt/java/bin/java -Xms8m -Xmx32m -XX:+UseSerialGC -XX:ActiveProcessorCount=1 -cp /app/healthcheck WebsiteHealthcheck; \
     wget -T 5 -qO /tmp/website-client-info.json http://127.0.0.1:8080/api/client/info; \
     grep -Eq '"hostname"[[:space:]]*:[[:space:]]*"javadevjt[.]tech"' /tmp/website-client-info.json; \
     grep -Eq '"username"[[:space:]]*:[[:space:]]*"visitor"' /tmp/website-client-info.json; \
