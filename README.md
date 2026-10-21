@@ -40,6 +40,7 @@ Vite serves the development UI on port 3000. `npm run build` runs TypeScript che
 - `/api/blog` exposes read-only access to the legacy JPA-backed blog. The terminal's Markdown blog and portfolio use `/api/content/**` instead.
 - The H2 database is ephemeral by default. Resource-backed articles and portfolio entries are checked-in files, independent of that database.
 - `/actuator/health` reports application health. The terminal's server-information commands are deliberately public display features.
+- Backend OpenWoof telemetry is opt-in and uses the native Spring OpenTelemetry providers, a Logback bridge, and real content/database operation timers. See the [telemetry record](docs/openwoof-telemetry-2026-10-20.md) for configuration, privacy decisions, and the deployed acceptance boundary.
 
 ## CI and containers
 

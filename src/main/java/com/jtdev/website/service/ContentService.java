@@ -2,6 +2,9 @@ package com.jtdev.website.service;
 
 import com.jtdev.website.model.BlogMetadata;
 import com.jtdev.website.model.PortfolioMetadata;
+import com.jtdev.website.observability.WebsiteOperations;
+import com.jtdev.website.observability.WebsiteOperations.ContentCollection;
+import com.jtdev.website.observability.WebsiteOperations.Operation;
 import com.vladsch.flexmark.ext.tables.TablesExtension;
 import com.vladsch.flexmark.html.HtmlRenderer;
 import com.vladsch.flexmark.parser.Parser;
@@ -11,11 +14,14 @@ import org.springframework.core.io.Resource;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.core.io.support.ResourcePatternResolver;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.HtmlUtils;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.imageio.ImageIO;
 import java.awt.*;
@@ -37,6 +43,7 @@ import java.util.stream.Collectors;
 @Service
 public class ContentService {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(ContentService.class);
     private static final Set<String> PUBLIC_CONTENT_DIRECTORIES = Set.of("blog", "portfolio");
     private static final Pattern BARE_METADATA_HEADER = Pattern.compile(
         "\\A((?:(?:title|type|year|technologies|company|published|tags)[ \\t]*:[^\\r\\n]*(?:\\r?\\n|\\r))+)(?:\\r?\\n|\\r)",
@@ -44,28 +51,38 @@ public class ContentService {
 
     private final ResourceLoader resourceLoader;
     private final ResourcePatternResolver resourcePatternResolver;
+    private final WebsiteOperations websiteOperations;
     private String resumeTextCache;
     private final Object resumeLock = new Object();
 
-    public ContentService(ResourceLoader resourceLoader) {
+    @Autowired
+    public ContentService(ResourceLoader resourceLoader, WebsiteOperations websiteOperations) {
         this.resourceLoader = resourceLoader;
         this.resourcePatternResolver = new PathMatchingResourcePatternResolver(resourceLoader);
+        this.websiteOperations = websiteOperations;
+    }
+
+    public ContentService(ResourceLoader resourceLoader) {
+        this(resourceLoader, WebsiteOperations.noop());
     }
 
     public List<String> getDirectoryContents(String path) throws IOException {
         String directory = requirePublicDirectory(path);
-        List<String> contents = new ArrayList<>();
+        ContentCollection collection = ContentCollection.forPublicDirectory(directory);
+        return websiteOperations.measure(Operation.CONTENT_DIRECTORY_LIST, collection, () -> {
+            List<String> contents = new ArrayList<>();
 
-        Resource[] resources = resourcePatternResolver.getResources(
-                "classpath:directories/" + directory + "/**");
-        for (Resource resource : resources) {
-            if (resource.exists() && !isDirectoryResource(resource) && resource.getFilename() != null) {
-                contents.add(resource.getFilename());
+            Resource[] resources = resourcePatternResolver.getResources(
+                    "classpath:directories/" + directory + "/**");
+            for (Resource resource : resources) {
+                if (resource.exists() && !isDirectoryResource(resource) && resource.getFilename() != null) {
+                    contents.add(resource.getFilename());
+                }
             }
-        }
 
-        contents.sort(String::compareTo);
-        return contents;
+            contents.sort(String::compareTo);
+            return contents;
+        });
     }
 
     public String getMarkdownContent(String path) throws IOException {
@@ -73,33 +90,30 @@ public class ContentService {
         int separator = path.indexOf('/');
         String directory = path.substring(0, separator);
         String filename = path.substring(separator + 1);
-        Resource resource = Arrays.stream(getMarkdownResources(directory))
-                .filter(candidate -> filename.equals(candidate.getFilename()))
-                .findFirst()
-                .orElse(null);
-        if (resource == null || !resource.exists()) {
-            return "File not found: " + path;
-        }
+        ContentCollection collection = ContentCollection.forPublicDirectory(directory);
+        return websiteOperations.measure(Operation.CONTENT_MARKDOWN_READ, collection, () -> {
+            Resource resource = Arrays.stream(getMarkdownResources(directory))
+                    .filter(candidate -> filename.equals(candidate.getFilename()))
+                    .findFirst()
+                    .orElse(null);
+            if (resource == null || !resource.exists()) {
+                return "File not found: " + path;
+            }
 
-        String markdown;
-        try (InputStream inputStream = resource.getInputStream()) {
-            markdown = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
-        }
+            String markdown = readUtf8(resource, collection);
 
-        // Parse markdown and convert to ASCII-friendly format
-        MutableDataSet options = new MutableDataSet();
-        options.set(Parser.EXTENSIONS, java.util.Arrays.asList(TablesExtension.create()));
-        Parser parser = Parser.builder(options).build();
-        HtmlRenderer renderer = HtmlRenderer.builder(options).build();
+            // Parse markdown and convert to ASCII-friendly format
+            MutableDataSet options = new MutableDataSet();
+            options.set(Parser.EXTENSIONS, java.util.Arrays.asList(TablesExtension.create()));
+            Parser parser = Parser.builder(options).build();
+            HtmlRenderer renderer = HtmlRenderer.builder(options).build();
 
-        Node document = parser.parse(markdown);
-        String html = renderer.render(document);
+            Node document = parser.parse(markdown);
+            String html = renderer.render(document);
 
-        // Extract directory from path (e.g., "blog" from "blog/SAMPLE.md")
-        String dir = path.contains("/") ? path.substring(0, path.lastIndexOf('/')) : "";
-        
-        // Convert HTML to ASCII art representation
-        return convertHtmlToAscii(html, dir);
+            // Convert HTML to ASCII art representation
+            return convertHtmlToAscii(html, directory);
+        });
     }
 
     private String requirePublicDirectory(String path) {
@@ -417,14 +431,19 @@ public class ContentService {
 
     private String generateAsciiArt(String src, String dir) {
         try {
-            BufferedImage img;
-            if (src.startsWith("http")) {
-                img = ImageIO.read(new URL(src));
-            } else {
+            ContentCollection collection = ContentCollection.forPublicDirectory(dir);
+            BufferedImage img = websiteOperations.measure(Operation.CONTENT_RESOURCE_READ, collection, () -> {
+                if (src.startsWith("http")) {
+                    return ImageIO.read(new URL(src));
+                }
+
                 // Assume relative to classpath directories
-                Resource res = resourceLoader.getResource("classpath:directories/" + (dir.isEmpty() ? "" : dir + "/") + src);
-                img = ImageIO.read(res.getInputStream());
-            }
+                Resource res = resourceLoader.getResource(
+                        "classpath:directories/" + (dir.isEmpty() ? "" : dir + "/") + src);
+                try (InputStream inputStream = res.getInputStream()) {
+                    return ImageIO.read(inputStream);
+                }
+            });
 
             // Resize to small size for ASCII
             int width = 80;
@@ -504,10 +523,24 @@ public class ContentService {
         return resources;
     }
 
-    private String readUtf8(Resource resource) throws IOException {
-        try (InputStream inputStream = resource.getInputStream()) {
-            return new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
-        }
+    private String readUtf8(Resource resource, ContentCollection collection) throws IOException {
+        return new String(readResourceBytes(resource, collection), StandardCharsets.UTF_8);
+    }
+
+    private byte[] readResourceBytes(Resource resource, ContentCollection collection) throws IOException {
+        return websiteOperations.measure(Operation.CONTENT_RESOURCE_READ, collection, () -> {
+            try (InputStream inputStream = resource.getInputStream()) {
+                return inputStream.readAllBytes();
+            }
+        });
+    }
+
+    static void logMetadataFailure(ContentCollection collection, Object resource, Exception exception) {
+        String collectionName = collection.attributeValue();
+        LOGGER.atWarn()
+                .addKeyValue("content.collection", collectionName)
+                .setCause(exception)
+                .log("Error parsing {} metadata for {}: {}", collectionName, resource, exception.getMessage());
     }
 
     /**
@@ -555,6 +588,10 @@ public class ContentService {
      * Get list of blog posts with metadata
      */
     public List<BlogMetadata> getBlogList() throws IOException {
+        return websiteOperations.measure(Operation.CONTENT_CATALOGUE_LIST, ContentCollection.BLOG, this::readBlogList);
+    }
+
+    private List<BlogMetadata> readBlogList() throws IOException {
         List<BlogMetadata> blogs = new ArrayList<>();
 
         for (Resource file : getMarkdownResources("blog")) {
@@ -563,7 +600,7 @@ public class ContentService {
                 if (filename == null) {
                     continue;
                 }
-                String markdown = readUtf8(file);
+                String markdown = readUtf8(file, ContentCollection.BLOG);
                 Map<String, String> frontmatter = parseFrontmatter(markdown);
                     
                 String title = frontmatter.getOrDefault("title",
@@ -596,7 +633,7 @@ public class ContentService {
                 String excerpt = extractExcerpt(markdown);
                 blogs.add(new BlogMetadata(filename, title, published, tags, excerpt));
             } catch (Exception e) {
-                System.err.println("Error parsing blog metadata for " + file + ": " + e.getMessage());
+                logMetadataFailure(ContentCollection.BLOG, file, e);
             }
         }
 
@@ -611,6 +648,11 @@ public class ContentService {
      * Get list of portfolio projects with metadata
      */
     public List<PortfolioMetadata> getPortfolioList() throws IOException {
+        return websiteOperations.measure(
+                Operation.CONTENT_CATALOGUE_LIST, ContentCollection.PORTFOLIO, this::readPortfolioList);
+    }
+
+    private List<PortfolioMetadata> readPortfolioList() throws IOException {
         List<PortfolioMetadata> projects = new ArrayList<>();
 
         for (Resource file : getMarkdownResources("portfolio")) {
@@ -619,7 +661,7 @@ public class ContentService {
                 if (filename == null) {
                     continue;
                 }
-                String markdown = readUtf8(file);
+                String markdown = readUtf8(file, ContentCollection.PORTFOLIO);
                 Map<String, String> frontmatter = parseFrontmatter(markdown);
                     
                 String title = frontmatter.getOrDefault("title",
@@ -642,7 +684,7 @@ public class ContentService {
                 projects.add(new PortfolioMetadata(filename, title,
                     technologies, company, year, excerpt));
             } catch (Exception e) {
-                System.err.println("Error parsing portfolio metadata for " + file + ": " + e.getMessage());
+                logMetadataFailure(ContentCollection.PORTFOLIO, file, e);
             }
         }
 
@@ -656,7 +698,8 @@ public class ContentService {
 
         synchronized (resumeLock) {
             if (resumeTextCache == null) {
-                resumeTextCache = loadResumeTextFromPdf();
+                resumeTextCache = websiteOperations.measure(
+                        Operation.RESUME_PDF_EXTRACTION, ContentCollection.RESUME, this::loadResumeTextFromPdf);
             }
         }
 
@@ -677,10 +720,7 @@ public class ContentService {
             throw new IOException("Resume PDF not found");
         }
 
-        byte[] pdfBytes;
-        try (InputStream inputStream = resource.getInputStream()) {
-            pdfBytes = inputStream.readAllBytes();
-        }
+        byte[] pdfBytes = readResourceBytes(resource, ContentCollection.RESUME);
 
         try (PDDocument document = Loader.loadPDF(pdfBytes)) {
             PDFTextStripper stripper = new PDFTextStripper();
