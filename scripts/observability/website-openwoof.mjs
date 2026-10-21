@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { spawn as spawnProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { request as httpsRequest } from "node:https";
-import { basename, dirname } from "node:path";
+import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
@@ -13,12 +13,14 @@ export const TARGET = Object.freeze({
   catalogApp: "ix-app",
   catalogVersion: "1.4.4",
   service: "website",
+  environment: "production",
   uid: 1001,
   gid: 1001,
+  websiteParentDirectory: "/mnt/Lake",
   repository: "ghcr.io/javadevjt/website",
-  websiteDirectory: "/mnt/Lake/Data/website",
-  hostDirectory: "/mnt/Lake/Data/website/secrets",
-  hostKey: "/mnt/Lake/Data/website/secrets/openwoof-ingest.key",
+  websiteDirectory: "/mnt/Lake/website-openwoof",
+  hostDirectory: "/mnt/Lake/website-openwoof/secrets",
+  hostKey: "/mnt/Lake/website-openwoof/secrets/openwoof-ingest.key",
   keyTarget: "/run/secrets/openwoof-ingest-key",
   otlpEndpoint: "https://openwoof.javadevjt.tech",
   sourceBase: "aaf86d9ee76a9c6ae1f18560e707aac178da46e3",
@@ -96,17 +98,17 @@ function validateSourceDigest(sourceSha, digest) {
 
 export function parseArgs(argv) {
   const values = new Map();
-  const known = new Set(["--mode", "--source-sha", "--image-digest", "--confirm", "--prepared", "--tail"]);
+  const known = new Set(["--mode", "--source-sha", "--image-digest", "--confirm", "--tail"]);
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     if (!known.has(flag) || values.has(flag) || argv[index + 1] === undefined || argv[index + 1].startsWith("--")) {
-      throw new TypeError("usage: --mode inspect|dry-run|prepare-key|apply|logs [--source-sha SHA --image-digest sha256:HEX] [--confirm website] [--prepared website] [--tail 1..200]");
+      throw new TypeError("usage: --mode inspect|dry-run|prepare-key|prepare-delivery|apply|logs [--source-sha SHA --image-digest sha256:HEX] [--confirm website] [--tail 1..200]");
     }
     values.set(flag, argv[++index]);
   }
   const mode = values.get("--mode") ?? "inspect";
-  if (!["inspect", "dry-run", "prepare-key", "apply", "logs"].includes(mode)) {
-    throw new TypeError("mode must be inspect, dry-run, prepare-key, apply, or logs");
+  if (!["inspect", "dry-run", "prepare-key", "prepare-delivery", "apply", "logs"].includes(mode)) {
+    throw new TypeError("mode must be inspect, dry-run, prepare-key, prepare-delivery, apply, or logs");
   }
   const sourceSha = values.get("--source-sha");
   const digest = values.get("--image-digest");
@@ -116,12 +118,6 @@ export function parseArgs(argv) {
     if (values.get("--confirm") !== TARGET.app) throw new TypeError("explicit --confirm website is required");
   } else if (sourceSha !== undefined || digest !== undefined || values.has("--confirm")) {
     throw new TypeError("image and confirmation flags are accepted only by dry-run or apply");
-  }
-  if (mode === "prepare-key" && values.get("--prepared") !== TARGET.app) {
-    throw new TypeError("prepare-key requires explicit --prepared website after primary readiness review");
-  }
-  if (mode !== "prepare-key" && values.has("--prepared")) {
-    throw new TypeError("--prepared is accepted only by prepare-key");
   }
   const tailText = values.get("--tail");
   let tail = 50;
@@ -226,10 +222,17 @@ export function assertSecretsDirectoryEmpty(entries) {
   return true;
 }
 
-export function assertRootOnlyDirectoryMetadata(stat, acl, path) {
+export function assertPrivateDirectoryMetadata(stat, acl, path) {
   return isRecord(stat) && stat.realpath === path && stat.type === "DIRECTORY"
-    && stat.uid === 0 && stat.gid === 0 && (Number(stat.mode) & 0o7777) === 0o700
+    && stat.uid === TARGET.uid && stat.gid === TARGET.gid && (Number(stat.mode) & 0o7777) === 0o700
     && isRecord(acl) && acl.path === path && acl.trivial === true;
+}
+
+export function assertPrivateStagingParentMetadata(stat, acl) {
+  return isRecord(stat) && stat.realpath === TARGET.websiteParentDirectory && stat.type === "DIRECTORY"
+    && stat.uid === 0 && Number.isSafeInteger(stat.mode) && (stat.mode & 0o0022) === 0
+    && isRecord(acl) && acl.path === TARGET.websiteParentDirectory
+    && acl.acltype === "POSIX1E" && acl.trivial === true;
 }
 
 export async function callMutationOnce(client, method, params = [], timeoutMs = REQUEST_TIMEOUT_MS) {
@@ -250,15 +253,15 @@ export function buildKeySetpermRequest() {
   };
 }
 
-export function buildRootOnlyDirectoryMkdirRequest(path) {
-  if (![TARGET.websiteDirectory, TARGET.hostDirectory].includes(path)) throw new TypeError("invalid website secret directory");
+export function buildPrivateDirectoryMkdirRequest(path) {
+  if (![TARGET.websiteDirectory, TARGET.hostDirectory].includes(path)) throw new TypeError("invalid website app directory");
   return { path, options: { mode: "700", raise_chmod_error: true } };
 }
 
-export function buildRootOnlyDirectorySetpermRequest(path) {
-  if (![TARGET.websiteDirectory, TARGET.hostDirectory].includes(path)) throw new TypeError("invalid website secret directory");
+export function buildPrivateDirectorySetpermRequest(path) {
+  if (![TARGET.websiteDirectory, TARGET.hostDirectory].includes(path)) throw new TypeError("invalid website app directory");
   return {
-    path, uid: 0, gid: 0, mode: "700",
+    path, uid: TARGET.uid, gid: TARGET.gid, mode: "700",
     options: { recursive: false, traverse: false, stripacl: true },
   };
 }
@@ -739,7 +742,7 @@ async function directoryEntries(client, path) {
   return entries;
 }
 
-async function verifyRootOnlyDirectory(client, path, label, ambiguous = false) {
+async function verifyPrivateDirectory(client, path, label, ambiguous = false) {
   let stat;
   let acl;
   try {
@@ -750,40 +753,58 @@ async function verifyRootOnlyDirectory(client, path, label, ambiguous = false) {
   } catch {
     fail(`${label} permission readback unavailable`, { ambiguous });
   }
-  if (!assertRootOnlyDirectoryMetadata(stat, acl, path)) {
-    fail(`${label} is not root-owned mode 0700 with a trivial ACL`, { ambiguous });
+  if (!assertPrivateDirectoryMetadata(stat, acl, path)) {
+    fail(`${label} is not owned by the website service with mode 0700 and a trivial ACL`, { ambiguous });
   }
 }
 
-async function setRootOnlyDirectoryPermissions(client, path, label) {
-  const result = await callMutationOnce(client, "filesystem.setperm", [buildRootOnlyDirectorySetpermRequest(path)]);
-  const jobId = extractJobId(result);
-  await waitForJob(client, jobId, FILE_JOB_TIMEOUT_MS, `${label} permission job`);
-  await verifyRootOnlyDirectory(client, path, label, true);
+async function verifyPrivateStagingParent(client, label) {
+  let stat;
+  let acl;
+  try {
+    [stat, acl] = await Promise.all([
+      client.call("filesystem.stat", [TARGET.websiteParentDirectory]),
+      client.call("filesystem.getacl", [TARGET.websiteParentDirectory, true, false]),
+    ]);
+  } catch {
+    fail(`${label} staging parent readback unavailable`);
+  }
+  if (!assertPrivateStagingParentMetadata(stat, acl)) {
+    fail(`${label} staging parent changed; expected root-owned nonwritable POSIX1E directory`);
+  }
 }
 
-async function createRootOnlyDirectory(client, path, label) {
+async function setPrivateDirectoryPermissions(client, path, label) {
+  const result = await callMutationOnce(client, "filesystem.setperm", [buildPrivateDirectorySetpermRequest(path)]);
+  const jobId = extractJobId(result);
+  await waitForJob(client, jobId, FILE_JOB_TIMEOUT_MS, `${label} permission job`);
+  await verifyPrivateDirectory(client, path, label, true);
+}
+
+async function createPrivateDirectory(client, path, label) {
   // mkdir is nonrecursive and EEXIST-safe; never infer success from its return payload.
-  await callMutationOnce(client, "filesystem.mkdir", [buildRootOnlyDirectoryMkdirRequest(path)]);
-  await setRootOnlyDirectoryPermissions(client, path, label);
+  await callMutationOnce(client, "filesystem.mkdir", [buildPrivateDirectoryMkdirRequest(path)]);
+  await setPrivateDirectoryPermissions(client, path, label);
 }
 
 async function requireWebsiteDirectory(client) {
-  const entries = await directoryEntries(client, dirname(TARGET.websiteDirectory));
+  await verifyPrivateStagingParent(client, "website");
+  const entries = await directoryEntries(client, TARGET.websiteParentDirectory);
   if (!entries.some(entry => entry?.name === basename(TARGET.websiteDirectory) || entry?.path === TARGET.websiteDirectory)) {
-    fail("website root directory is absent; run prepare-key to establish the scoped root");
+    fail("website app directory is absent; run prepare-delivery before delivery");
   }
-  await verifyRootOnlyDirectory(client, TARGET.websiteDirectory, "website root directory");
+  await verifyPrivateDirectory(client, TARGET.websiteDirectory, "website app directory");
 }
 
-async function ensureWebsiteDirectory(client) {
-  const entries = await directoryEntries(client, dirname(TARGET.websiteDirectory));
+async function ensurePrivateWebsiteDirectory(client) {
+  await verifyPrivateStagingParent(client, "website");
+  const entries = await directoryEntries(client, TARGET.websiteParentDirectory);
   const exists = entries.some(entry => entry?.name === basename(TARGET.websiteDirectory) || entry?.path === TARGET.websiteDirectory);
   if (exists) {
-    await verifyRootOnlyDirectory(client, TARGET.websiteDirectory, "existing website root directory");
+    await verifyPrivateDirectory(client, TARGET.websiteDirectory, "existing website app directory");
     return;
   }
-  await createRootOnlyDirectory(client, TARGET.websiteDirectory, "new website root directory");
+  await createPrivateDirectory(client, TARGET.websiteDirectory, "new website app directory");
 }
 
 async function assertSecretsDirectoryAbsentOnNas(client) {
@@ -795,9 +816,9 @@ async function createFreshSecretsDirectory(client) {
   await assertSecretsDirectoryAbsentOnNas(client);
 
   // filesystem.put opens with wb+ and has no exclusive-create option. A fresh,
-  // atomically created root-only child directory plus one task-owned writer is
+  // atomically created private child directory plus one task-owned writer is
   // the no-overwrite boundary. Never reuse or replay after an ambiguous result.
-  await createRootOnlyDirectory(client, TARGET.hostDirectory, "new website secrets directory");
+  await createPrivateDirectory(client, TARGET.hostDirectory, "new website secrets directory");
 }
 
 async function assertSecretsDirectoryEmptyOnNas(client) {
@@ -821,26 +842,41 @@ async function secureKeyFile(client, expectedSize) {
   }
 }
 
-function metadataSafe(instance) {
-  return {
-    id: instance.id,
-    state: instance.state,
-    version: instance.version,
-    custom_app: instance.custom_app,
+export async function connectForMode(inputs, {
+  connect = connectTrueNAS,
+  ensureIngestKey = () => runKeychain("ensure-ingest-key"),
+  writeOutput = text => process.stdout.write(text),
+} = {}) {
+  if (inputs.mode !== "prepare-key") return await connect();
+
+  const keychainStatus = await ensureIngestKey();
+  if (!["created", "already-present"].includes(keychainStatus)) fail("Keychain status invalid");
+  writeOutput(`${JSON.stringify({
+    app: TARGET.app,
     service: TARGET.service,
-  };
+    environment: TARGET.environment,
+    keychainStatus,
+    nasAccess: false,
+  })}\n`);
+  return null;
 }
 
-async function prepareKey(client) {
+export async function prepareDelivery(client, { writeOutput = text => process.stdout.write(text) } = {}) {
   const { instance, config } = await readApp(client);
   if (instance.custom_app !== false || instance.version !== TARGET.catalogVersion
       || config.image?.repository !== TARGET.repository || config.image?.tag !== TARGET.sourceBaseImageTag) {
     fail("website target is not in the prepared base state");
   }
-  await ensureWebsiteDirectory(client);
+  await ensurePrivateWebsiteDirectory(client);
   await assertSecretsDirectoryAbsentOnNas(client);
-  const state = await runKeychain("ensure-ingest-key");
-  process.stdout.write(`${JSON.stringify({ ...metadataSafe(instance), keychain: state === "created" ? "created" : "already-present", nasFile: "unchanged" })}\n`);
+  writeOutput(`${JSON.stringify({
+    app: TARGET.app,
+    service: TARGET.service,
+    environment: TARGET.environment,
+    appDirectory: { path: TARGET.websiteDirectory, uid: TARGET.uid, gid: TARGET.gid, mode: "0700", acl: "trivial" },
+    secretsDirectory: "absent",
+    ingestKeyAccess: false,
+  })}\n`);
 }
 
 async function inspect(client, inputs) {
@@ -938,8 +974,9 @@ async function main(argv) {
   }
   let client = null;
   try {
-    client = await connectTrueNAS();
-    if (inputs.mode === "prepare-key") return await prepareKey(client);
+    client = await connectForMode(inputs);
+    if (inputs.mode === "prepare-key") return;
+    if (inputs.mode === "prepare-delivery") return await prepareDelivery(client);
     if (inputs.mode === "inspect" || inputs.mode === "dry-run") return await inspect(client, inputs);
     if (inputs.mode === "apply") return await apply(client, inputs);
     if (inputs.mode === "logs") return await logs(client, inputs.tail);

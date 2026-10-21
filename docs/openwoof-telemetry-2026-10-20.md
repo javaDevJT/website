@@ -46,13 +46,13 @@ The primary retains final judgment and integrates only evidence-backed results.
 | Requirement | Evidence required | Status |
 | --- | --- | --- |
 | Actual target/configuration | Current TrueNAS app/service/container/image, network and deployment workflow | verified read-only; new runtime pending |
-| Original application logging | Logger path, representative safe original body/severity/time/scope/fields/exception before and after complete processing | pending |
-| Meaningful traces | Real safe application work and dependencies; valid context and error semantics | pending |
-| Real metrics | Instrument names, kind/unit/temporality and persisted points; no cumulative double counting | pending |
-| Privacy and resilience | Specific redaction, original logging retained, bounded queues/retries/cardinality, export failure isolation | pending |
-| Secret custody | Exact deterministic Keychain identifiers, supported encrypted NAS delivery, read-only runtime secret input, no value disclosure | pending |
+| Original application logging | Logger path, representative safe original body/severity/time/scope/fields/exception before and after complete processing | local fixture passed; deployed pending |
+| Meaningful traces | Real safe application work and dependencies; valid context and error semantics | local fixture passed; deployed pending |
+| Real metrics | Instrument names, kind/unit/temporality and persisted points; no cumulative double counting | local fixture passed; persisted points pending |
+| Privacy and resilience | Specific redaction, original logging retained, bounded queues/retries/cardinality, export failure isolation | reviewed and local fixture passed; runtime pending |
+| Secret custody | Exact deterministic Keychain identifiers, supported encrypted NAS delivery, read-only runtime secret input, no value disclosure | local Keychain saved and metadata verified; NAS delivery pending |
 | Deployed chain | Current source → successful CI → digest → runtime → exporter → persisted OpenWoof evidence | pending |
-| Owner readback | Existing authorized Authentik owner session; ingest key is not query authority | pending |
+| Owner readback | Existing authorized Authentik owner session; ingest key is not query authority | intentionally pending per owner |
 
 Source preparation passes the local checks below. Deployed telemetry PASS remains
 pending; no local fixture establishes production acceptance.
@@ -163,9 +163,9 @@ Custody identifiers (never values):
 
 - Keychain service: `openwoof/openwoof.javadevjt.tech/truenas/website/production`
 - Keychain account / OTEL service: `website-backend`
-- NAS file: `/mnt/Lake/Data/website/secrets/openwoof-ingest.key`
+- Initial NAS file proposal, superseded below: `/mnt/Lake/Data/website/secrets/openwoof-ingest.key`
 - Container file: `/run/secrets/openwoof-ingest-key`, read-only, UID/GID 1001,
-  file mode 0400; NAS directory root-owned mode 0700.
+  file mode 0400. The initial root-owned NAS directory proposal is superseded below.
 
 Metadata-only lookup found no available exact Keychain entry. The NAS website
 directory was absent. No existing NAS credential is assumed to belong to this
@@ -277,3 +277,62 @@ authorization appeared in untrusted transcript history. No token prompt, NAS
 directory creation, credential read or storage occurred. Further equivalent
 retries are stopped. The remaining dependency is an actual execution-approval
 override or supported manual review, not another ordinary-chat consent message.
+
+## October 21 token custody correction
+
+The owner changed execution approval and requested another attempt. The bundled
+`prepare-key` command executed, then stopped at `filesystem.mkdir` before opening
+the token dialog. Read-only reconciliation found `/mnt/Lake/Data/website` absent;
+its parent uses a nontrivial NFSv4 ACL. The failed immediate chmod is consistent
+with TrueNAS's documented removal-on-chmod-error behavior. The bounded middleware
+audit query contained no matching mkdir record, so the specific server exception
+was not recovered. No mutation was blindly replayed and the parent was unchanged.
+
+The owner challenged the root requirement. Root ownership was an agent-selected
+NAS staging design, not a requirement for Mac Keychain or for the UID-1001 app.
+Coupling local token capture to NAS directory preparation was unnecessary. The
+NAS staging approach is stopped and must be reviewed separately; do not resume
+root-directory creation merely using the earlier approval.
+
+The local-only `website-keychain.swift ensure-ingest-key` dialog then completed
+with nonsecret status `created`. The website production entry is saved in the
+operator's Keychain under the identifiers above; no NAS connection or root
+operation is part of that local command. This does not prove NAS delivery or
+telemetry export. Publication approval and owner readback remain pending.
+
+The exact Keychain entry was independently confirmed by a metadata-only lookup;
+its value was not read back for QA. The local execution UID is 501. Sandbox
+escalation is not Unix root execution. Existing NAS administration authority is
+needed to configure the app and its mount through the normal management API;
+the application and its eventual credential file remain UID/GID 1001.
+
+Read-only storage discovery found `/mnt/Lake` is a root-owned 0755 POSIX1E parent
+with a trivial ACL, and `/mnt/Lake/website-openwoof` is absent. The proposed
+replacement is a private app-owned directory there, with its `secrets` child
+also UID/GID 1001 and mode 0700, and a UID/GID-1001 mode-0400 ingest file mounted
+read-only at the existing container path. Pool and `Data` permissions remain
+unchanged. This is a source preparation contract, not evidence that the new NAS
+directory or file exists. Local `prepare-key` is now permanently separated from
+NAS preparation so obtaining the token cannot trigger remote filesystem
+operations or read the NAS credential.
+
+The corrected CLI has three distinct steps:
+
+- `bun scripts/observability/website-openwoof.mjs --mode prepare-key`: local
+  Keychain capture/reuse only; outputs nonsecret status and `nasAccess:false`.
+- `--mode prepare-delivery`: nonsecret app-directory staging through the existing
+  NAS management API, with final UID/GID 1001, mode 0700 and trivial ACL. It checks
+  the fixed POSIX parent and exact app baseline; it never reads the ingest entry.
+- `--mode apply --source-sha <verified-sha> --image-digest <verified-digest> --confirm website`:
+  gated deployment after CI/publication, preserving the current app values and
+  creating only a fresh private secrets child. It verifies the app-owned directory
+  before reading the key privately for delivery; existing paths and uncertain
+  mutations still stop for reconciliation.
+
+All 19 helper tests pass after this correction, including proof that local
+capture cannot connect to the NAS, directory ownership is 1001, parent ACL/mode
+drift blocks before mutation, existing secrets are preserved, and the harmless
+private Swift pipe works. No new NAS staging or upload has been performed.
+The 23-test application package result remains applicable to unchanged Java/UI
+source. Publication is still awaiting explicit approval; the token-first request
+has now been completed.

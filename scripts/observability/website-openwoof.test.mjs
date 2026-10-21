@@ -11,7 +11,8 @@ import {
   TARGET,
   assertDirectoryAbsent,
   assertKeyFileMetadata,
-  assertRootOnlyDirectoryMetadata,
+  assertPrivateDirectoryMetadata,
+  assertPrivateStagingParentMetadata,
   assertRuntimeConfiguration,
   assertSecretsDirectoryEmpty,
   assertWebsiteInstance,
@@ -19,15 +20,17 @@ import {
   buildKeySetpermRequest,
   buildLogEventName,
   buildManagementWebSocketOptions,
-  buildRootOnlyDirectoryMkdirRequest,
-  buildRootOnlyDirectorySetpermRequest,
+  buildPrivateDirectoryMkdirRequest,
+  buildPrivateDirectorySetpermRequest,
   buildStorageMount,
   buildUploadRequest,
   buildUploadBody,
   buildWebsiteConfig,
   callMutationOnce,
+  connectForMode,
   extractBoundedLogEntry,
   parseArgs,
+  prepareDelivery,
   projectInspection,
   redactLogLine,
 } from "./website-openwoof.mjs";
@@ -98,9 +101,64 @@ test("CLI parsing requires explicit target confirmation and immutable source/ima
   const args = parseArgs(["--mode", "apply", "--source-sha", SOURCE, "--image-digest", DIGEST, "--confirm", "website"]);
   assert.equal(args.image.sourceSha, SOURCE);
   assert.equal(args.image.imageTag, `main-${SOURCE.slice(0, 7)}@${DIGEST}`);
-  assert.throws(() => parseArgs(["--mode", "prepare-key"]), /--prepared website/);
-  assert.equal(parseArgs(["--mode", "prepare-key", "--prepared", "website"]).mode, "prepare-key");
+  assert.equal(parseArgs(["--mode", "prepare-key"]).mode, "prepare-key");
+  assert.equal(parseArgs(["--mode", "prepare-delivery"]).mode, "prepare-delivery");
+  assert.throws(() => parseArgs(["--mode", "prepare-key", "--prepared", "website"]), /usage/);
   assert.throws(() => parseArgs(["--mode", "logs", "--tail", "201"]), /1 to 200/);
+});
+
+test("prepare-key is local-only and reports only nonsecret target and Keychain status", async () => {
+  let connectCalls = 0;
+  let ensureCalls = 0;
+  const output = [];
+  const client = await connectForMode(parseArgs(["--mode", "prepare-key"]), {
+    connect: async () => { connectCalls += 1; throw new Error("NAS connection must not be attempted"); },
+    ensureIngestKey: async () => { ensureCalls += 1; return "created"; },
+    writeOutput: text => output.push(text),
+  });
+
+  assert.equal(client, null);
+  assert.equal(connectCalls, 0);
+  assert.equal(ensureCalls, 1);
+  assert.deepEqual(JSON.parse(output.join("")), {
+    app: "website",
+    service: "website",
+    environment: "production",
+    keychainStatus: "created",
+    nasAccess: false,
+  });
+});
+
+test("prepare-key validates the stubbed local Keychain status without connecting", async () => {
+  let connectCalls = 0;
+  for (const status of ["already-present"]) {
+    const output = [];
+    await connectForMode(parseArgs(["--mode", "prepare-key"]), {
+      connect: async () => { connectCalls += 1; throw new Error("NAS connection must not be attempted"); },
+      ensureIngestKey: async () => status,
+      writeOutput: text => output.push(text),
+    });
+    assert.equal(JSON.parse(output.join("")).keychainStatus, status);
+  }
+  await assert.rejects(connectForMode(parseArgs(["--mode", "prepare-key"]), {
+    connect: async () => { connectCalls += 1; throw new Error("NAS connection must not be attempted"); },
+    ensureIngestKey: async () => "unexpected-status",
+    writeOutput: () => assert.fail("invalid status must not be reported as success"),
+  }), error => error instanceof SafeFailure && error.phase === "Keychain status invalid");
+  assert.equal(connectCalls, 0);
+});
+
+test("prepare-delivery connects for NAS staging without reading the ingest Keychain item", async () => {
+  const client = {};
+  let connectCalls = 0;
+  let ingestKeyCalls = 0;
+  const result = await connectForMode(parseArgs(["--mode", "prepare-delivery"]), {
+    connect: async () => { connectCalls += 1; return client; },
+    ensureIngestKey: async () => { ingestKeyCalls += 1; throw new Error("ingest Keychain setup must not run"); },
+  });
+  assert.equal(result, client);
+  assert.equal(connectCalls, 1);
+  assert.equal(ingestKeyCalls, 0);
 });
 
 test("target guard rejects a custom app, wrong catalogue version, stopped app, or service drift", () => {
@@ -168,32 +226,153 @@ test("inherited endpoint, header, protocol and legacy OpenWoof credentials are c
   assert.equal(JSON.stringify(next).includes("fixture-authorization"), false);
 });
 
-test("secret delivery creates only fresh root-only directories and preserves unknown contents", () => {
+test("secret delivery creates only fresh private directories and preserves unknown contents", () => {
+  assert.equal(TARGET.websiteParentDirectory, "/mnt/Lake");
+  assert.equal(TARGET.websiteDirectory, "/mnt/Lake/website-openwoof");
+  assert.equal(TARGET.hostDirectory, "/mnt/Lake/website-openwoof/secrets");
+  assert.equal(TARGET.hostKey, "/mnt/Lake/website-openwoof/secrets/openwoof-ingest.key");
   assert.equal(assertDirectoryAbsent([], TARGET.hostDirectory), true);
   assert.throws(() => assertDirectoryAbsent([{ name: "secrets", type: "DIRECTORY" }], TARGET.hostDirectory), /already exists/);
   assert.throws(() => assertDirectoryAbsent([{ path: TARGET.hostDirectory, type: "FILE" }], TARGET.hostDirectory), /already exists/);
   assert.equal(assertSecretsDirectoryEmpty([]), true);
   assert.throws(() => assertSecretsDirectoryEmpty([{ name: "unrelated.txt", type: "FILE" }]), /unknown entries/);
 
-  const root = { realpath: TARGET.websiteDirectory, type: "DIRECTORY", uid: 0, gid: 0, mode: 0o40700 };
+  const directory = { realpath: TARGET.websiteDirectory, type: "DIRECTORY", uid: TARGET.uid, gid: TARGET.gid, mode: 0o40700 };
   const acl = { path: TARGET.websiteDirectory, trivial: true };
-  assert.equal(assertRootOnlyDirectoryMetadata(root, acl, TARGET.websiteDirectory), true);
-  assert.equal(assertRootOnlyDirectoryMetadata({ ...root, mode: 0o40755 }, acl, TARGET.websiteDirectory), false);
-  assert.equal(assertRootOnlyDirectoryMetadata(root, { ...acl, trivial: false }, TARGET.websiteDirectory), false);
+  assert.equal(assertPrivateDirectoryMetadata(directory, acl, TARGET.websiteDirectory), true);
+  assert.equal(assertPrivateDirectoryMetadata({ ...directory, uid: 0 }, acl, TARGET.websiteDirectory), false);
+  assert.equal(assertPrivateDirectoryMetadata({ ...directory, gid: 0 }, acl, TARGET.websiteDirectory), false);
+  assert.equal(assertPrivateDirectoryMetadata({ ...directory, mode: 0o40755 }, acl, TARGET.websiteDirectory), false);
+  assert.equal(assertPrivateDirectoryMetadata(directory, { ...acl, trivial: false }, TARGET.websiteDirectory), false);
 
-  assert.deepEqual(buildRootOnlyDirectoryMkdirRequest(TARGET.websiteDirectory), {
+  const parentStat = { realpath: TARGET.websiteParentDirectory, type: "DIRECTORY", uid: 0, gid: 0, mode: 0o40755 };
+  const parentAcl = { path: TARGET.websiteParentDirectory, acltype: "POSIX1E", trivial: true };
+  assert.equal(assertPrivateStagingParentMetadata(parentStat, parentAcl), true);
+  assert.equal(assertPrivateStagingParentMetadata({ ...parentStat, realpath: "/mnt/other" }, parentAcl), false);
+  assert.equal(assertPrivateStagingParentMetadata({ ...parentStat, type: "SYMLINK" }, parentAcl), false);
+  assert.equal(assertPrivateStagingParentMetadata({ ...parentStat, uid: 1001 }, parentAcl), false);
+  assert.equal(assertPrivateStagingParentMetadata({ ...parentStat, mode: 0o40775 }, parentAcl), false);
+  assert.equal(assertPrivateStagingParentMetadata({ ...parentStat, mode: undefined }, parentAcl), false);
+  assert.equal(assertPrivateStagingParentMetadata({ ...parentStat, mode: "invalid" }, parentAcl), false);
+  assert.equal(assertPrivateStagingParentMetadata(parentStat, { ...parentAcl, acltype: "NFS4" }), false);
+  assert.equal(assertPrivateStagingParentMetadata(parentStat, { ...parentAcl, trivial: false }), false);
+
+  assert.deepEqual(buildPrivateDirectoryMkdirRequest(TARGET.websiteDirectory), {
     path: TARGET.websiteDirectory, options: { mode: "700", raise_chmod_error: true },
   });
-  assert.deepEqual(buildRootOnlyDirectoryMkdirRequest(TARGET.hostDirectory), {
+  assert.deepEqual(buildPrivateDirectoryMkdirRequest(TARGET.hostDirectory), {
     path: TARGET.hostDirectory, options: { mode: "700", raise_chmod_error: true },
   });
-  assert.deepEqual(buildRootOnlyDirectorySetpermRequest(TARGET.hostDirectory), {
-    path: TARGET.hostDirectory, uid: 0, gid: 0, mode: "700",
+  assert.deepEqual(buildPrivateDirectorySetpermRequest(TARGET.websiteDirectory), {
+    path: TARGET.websiteDirectory, uid: 1001, gid: 1001, mode: "700",
     options: { recursive: false, traverse: false, stripacl: true },
   });
-  assert.throws(() => buildRootOnlyDirectorySetpermRequest("/mnt/Lake/Data"), /invalid/);
+  assert.deepEqual(buildPrivateDirectorySetpermRequest(TARGET.hostDirectory), {
+    path: TARGET.hostDirectory, uid: 1001, gid: 1001, mode: "700",
+    options: { recursive: false, traverse: false, stripacl: true },
+  });
+  assert.throws(() => buildPrivateDirectorySetpermRequest("/mnt/Lake/Data"), /invalid/);
 
   // The fresh directory and upload must have one task-owned writer; filesystem.put has no O_EXCL.
+});
+
+test("prepare-delivery stages only the scoped UID 1001 app directory", async () => {
+  const calls = [];
+  const client = {
+    async call(method, params) {
+      calls.push({ method, params });
+      if (method === "app.get_instance") return appInstance();
+      if (method === "app.config") return appConfig();
+      if (method === "filesystem.listdir" && params[0] === "/mnt/Lake") return [];
+      if (method === "filesystem.listdir" && params[0] === TARGET.websiteDirectory) return [];
+      if (method === "filesystem.mkdir") return { path: params[0].path };
+      if (method === "filesystem.setperm") return { id: 71 };
+      if (method === "core.get_jobs") return [{ id: 71, state: "SUCCESS" }];
+      if (method === "filesystem.stat" && params[0] === TARGET.websiteParentDirectory) return {
+        realpath: TARGET.websiteParentDirectory, type: "DIRECTORY", uid: 0, gid: 0, mode: 0o40755,
+      };
+      if (method === "filesystem.getacl" && params[0] === TARGET.websiteParentDirectory) return {
+        path: TARGET.websiteParentDirectory, acltype: "POSIX1E", trivial: true,
+      };
+      if (method === "filesystem.stat") return {
+        realpath: TARGET.websiteDirectory, type: "DIRECTORY", uid: TARGET.uid, gid: TARGET.gid, mode: 0o40700,
+      };
+      if (method === "filesystem.getacl") return { path: params[0], trivial: true };
+      assert.fail(`unexpected NAS method ${method}`);
+    },
+  };
+  const output = [];
+  await prepareDelivery(client, { writeOutput: text => output.push(text) });
+
+  assert.deepEqual(JSON.parse(output.join("")), {
+    app: "website",
+    service: "website",
+    environment: "production",
+    appDirectory: { path: "/mnt/Lake/website-openwoof", uid: 1001, gid: 1001, mode: "0700", acl: "trivial" },
+    secretsDirectory: "absent",
+    ingestKeyAccess: false,
+  });
+  assert.equal(calls.some(({ method }) => method === "filesystem.put" || method === "app.update"), false);
+  assert.deepEqual(calls.find(({ method }) => method === "filesystem.mkdir").params[0], {
+    path: TARGET.websiteDirectory,
+    options: { mode: "700", raise_chmod_error: true },
+  });
+  assert.deepEqual(calls.find(({ method }) => method === "filesystem.setperm").params[0], {
+    path: TARGET.websiteDirectory,
+    uid: 1001,
+    gid: 1001,
+    mode: "700",
+    options: { recursive: false, traverse: false, stripacl: true },
+  });
+  assert.equal(calls.some(({ method, params }) => method === "filesystem.listdir" && params[0] === "/mnt/Lake/Data"), false);
+  assert.equal(calls.some(({ method, params }) => method === "filesystem.setperm" && params[0].path === TARGET.websiteParentDirectory), false);
+});
+
+test("prepare-delivery refuses existing secrets, base-state drift, and parent ACL drift before mutation", async () => {
+  async function runFixture({ existingSecrets = false, imageTag = TARGET.sourceBaseImageTag, parentMode = 0o40755, parentAcltype = "POSIX1E" } = {}) {
+    const calls = [];
+    const client = {
+      async call(method, params) {
+        calls.push({ method, params });
+        if (method === "app.get_instance") return appInstance();
+        if (method === "app.config") return appConfig({ image: { repository: TARGET.repository, tag: imageTag } });
+        if (method === "filesystem.listdir" && params[0] === "/mnt/Lake") {
+          return [{ name: "website-openwoof", path: TARGET.websiteDirectory }];
+        }
+        if (method === "filesystem.listdir" && params[0] === TARGET.websiteDirectory) {
+          return existingSecrets ? [{ name: "secrets", type: "DIRECTORY", path: TARGET.hostDirectory }] : [];
+        }
+        if (method === "filesystem.stat" && params[0] === TARGET.websiteParentDirectory) return {
+          realpath: TARGET.websiteParentDirectory, type: "DIRECTORY", uid: 0, gid: 0, mode: parentMode,
+        };
+        if (method === "filesystem.getacl" && params[0] === TARGET.websiteParentDirectory) return {
+          path: TARGET.websiteParentDirectory, acltype: parentAcltype, trivial: true,
+        };
+        if (method === "filesystem.stat") return {
+          realpath: TARGET.websiteDirectory, type: "DIRECTORY", uid: TARGET.uid, gid: TARGET.gid, mode: 0o40700,
+        };
+        if (method === "filesystem.getacl") return { path: params[0], trivial: true };
+        assert.fail(`unexpected NAS method ${method}`);
+      },
+    };
+    return { client, calls };
+  }
+
+  const existing = await runFixture({ existingSecrets: true });
+  await assert.rejects(prepareDelivery(existing.client, { writeOutput: () => assert.fail("refused staging must not report success") }), /already exists/);
+  assert.equal(existing.calls.some(({ method }) => method === "filesystem.mkdir" || method === "filesystem.setperm"), false);
+
+  const drifted = await runFixture({ imageTag: "latest" });
+  await assert.rejects(prepareDelivery(drifted.client, { writeOutput: () => assert.fail("drifted target must not report success") }), /prepared base state/);
+  assert.equal(drifted.calls.some(({ method }) => method.startsWith("filesystem.")), false);
+
+  const unsafeParent = await runFixture({ parentMode: 0o40775 });
+  await assert.rejects(prepareDelivery(unsafeParent.client, { writeOutput: () => assert.fail("unsafe parent must not report success") }), /staging parent changed/);
+  assert.equal(unsafeParent.calls.some(({ method }) => method === "filesystem.listdir" || method === "filesystem.mkdir" || method === "filesystem.setperm"), false);
+
+  const unexpectedAcl = await runFixture({ parentAcltype: "NFS4" });
+  await assert.rejects(prepareDelivery(unexpectedAcl.client, { writeOutput: () => assert.fail("unexpected parent ACL must not report success") }), /staging parent changed/);
+  assert.equal(unexpectedAcl.calls.some(({ method }) => method === "filesystem.listdir" || method === "filesystem.mkdir" || method === "filesystem.setperm"), false);
 });
 
 test("secret mount and file permissions are exact and owner-only", () => {
