@@ -33,7 +33,7 @@
         <!-- Both BOMs manage the shared annotations; keep them on the same line. -->
         <jackson-2-bom.version>2.22.3</jackson-2-bom.version>
         <!-- Matches Boot 4.1.1's OpenTelemetry SDK 1.62.0; the Logback bridge is alpha. -->
-        <opentelemetry-instrumentation.version>2.28.1-alpha</opentelemetry-instrumentation.version>
+        <opentelemetry-instrumentation.version>2.32.0-alpha</opentelemetry-instrumentation.version>
     </properties>
     <dependencies>
 <!--        <dependency>-->
