@@ -2,7 +2,7 @@
 # Java and Node are build tools only; the published image contains a jlink runtime.
 FROM node:26.10.0-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80 AS node-toolchain
 
-FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS zlib-build
+FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS zlib-build
 RUN apk add --no-cache alpine-sdk ca-certificates dash=0.5.13.1-r2 && \
     adduser -D builder && addgroup builder abuild && \
     mkdir -p /build/zlib /build/dash /packages /out && chown -R builder:builder /build /packages /out
@@ -54,7 +54,7 @@ RUN mkdir -p /opt/website-healthcheck && \
       --strip-debug --no-header-files --no-man-pages --compress=zip-6 \
       --output /opt/java-runtime
 
-FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS runtime-base
+FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS runtime-base
 COPY --from=zlib-build /out/zlib.apk /tmp/zlib.apk
 COPY --from=zlib-build /out/dash.apk /tmp/dash.apk
 COPY --from=zlib-build /home/builder/.abuild/*.rsa.pub /etc/apk/keys/
