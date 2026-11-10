@@ -14,6 +14,8 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Adapts the standard OTLP inputs to Boot's native exporters before binding. */
 public final class OpenWoofEnvironmentPostProcessor implements EnvironmentPostProcessor, Ordered {
@@ -21,6 +23,9 @@ public final class OpenWoofEnvironmentPostProcessor implements EnvironmentPostPr
     static final String SERVICE = "website-backend";
     static final String NAMESPACE = "personal-website";
     static final String ENVIRONMENT = "production";
+    private static final Pattern CONTAINER_CGROUP_ID = Pattern.compile(
+            "(?:^|[\\s/])(?:cri-containerd|docker|containerd|libpod)[-/]([0-9a-f]{64})(?:\\.scope)?(?=$|[/\\s])",
+            Pattern.CASE_INSENSITIVE);
 
     @Override
     public int getOrder() {
@@ -63,8 +68,9 @@ public final class OpenWoofEnvironmentPostProcessor implements EnvironmentPostPr
             }
             Map<String, String> identity = identity(version);
             identity.forEach((key, value) -> properties.put("management.opentelemetry.resource-attributes[" + key + "]", value));
-            properties.put("OTEL_RESOURCE_ATTRIBUTES", identity.entrySet().stream()
-                    .map(entry -> entry.getKey() + "=" + entry.getValue()).collect(java.util.stream.Collectors.joining(",")));
+            // Keep owner-configured OTEL_RESOURCE_ATTRIBUTES intact. Boot merges
+            // those values with this pinned identity for traces and logs; the
+            // Micrometer registry copies the same Resource for metric exports.
             properties.put("management.opentelemetry.tracing.export.otlp.endpoint", ENDPOINT + "/v1/traces");
             properties.put("management.opentelemetry.tracing.export.otlp.transport", "http");
             properties.put("management.opentelemetry.logging.export.otlp.endpoint", ENDPOINT + "/v1/logs");
@@ -102,8 +108,39 @@ public final class OpenWoofEnvironmentPostProcessor implements EnvironmentPostPr
     }
 
     static Map<String, String> identity(String version) {
-        return Map.of("service.name", SERVICE, "service.namespace", NAMESPACE,
-                "deployment.environment.name", ENVIRONMENT, "service.version", version);
+        return identity(version, readContainerCgroup());
+    }
+
+    static Map<String, String> identity(String version, String cgroupContents) {
+        Map<String, String> attributes = new LinkedHashMap<>();
+        attributes.put("service.name", SERVICE);
+        attributes.put("service.namespace", NAMESPACE);
+        attributes.put("deployment.environment.name", ENVIRONMENT);
+        attributes.put("service.version", version);
+        String containerId = containerIdFromCgroup(cgroupContents);
+        if (containerId != null) {
+            attributes.put("container.id", containerId);
+        }
+        return Map.copyOf(attributes);
+    }
+
+    static String containerIdFromCgroup(String cgroupContents) {
+        if (cgroupContents == null || cgroupContents.isBlank()) {
+            return null;
+        }
+        Matcher matcher = CONTAINER_CGROUP_ID.matcher(cgroupContents);
+        if (!matcher.find()) {
+            return null;
+        }
+        return matcher.group(1).toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private static String readContainerCgroup() {
+        try {
+            return Files.readString(Path.of("/proc/self/cgroup"), StandardCharsets.UTF_8);
+        } catch (java.io.IOException | RuntimeException ignored) {
+            return "";
+        }
     }
 
     static String readKey(String filename) {

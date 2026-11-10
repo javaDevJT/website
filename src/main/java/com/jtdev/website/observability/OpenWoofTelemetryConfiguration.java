@@ -1,10 +1,12 @@
 package com.jtdev.website.observability;
 
+import io.micrometer.core.instrument.Clock;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.config.MeterFilter;
 import io.micrometer.observation.ObservationPredicate;
 import io.micrometer.registry.otlp.AggregationTemporality;
 import io.micrometer.registry.otlp.OtlpConfig;
+import io.micrometer.registry.otlp.OtlpMeterRegistry;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.exporter.otlp.http.logs.OtlpHttpLogRecordExporter;
 import io.opentelemetry.exporter.otlp.http.trace.OtlpHttpSpanExporter;
@@ -13,9 +15,11 @@ import io.opentelemetry.sdk.common.CompletableResultCode;
 import io.opentelemetry.sdk.common.export.RetryPolicy;
 import io.opentelemetry.sdk.logs.data.LogRecordData;
 import io.opentelemetry.sdk.logs.export.LogRecordExporter;
+import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import io.opentelemetry.sdk.trace.export.SpanExporter;
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -24,6 +28,7 @@ import org.springframework.http.server.reactive.observation.ServerRequestObserva
 
 import java.time.Duration;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -67,14 +72,17 @@ public class OpenWoofTelemetryConfiguration {
     }
 
     @Bean
-    OtlpConfig websiteMetricExportConfig(RuntimeSettings settings) {
+    OtlpConfig websiteMetricExportConfig(RuntimeSettings settings, Resource resource, TelemetryPrivacy privacy) {
         // Supply the exact single Authorization header privately. Boot's native
         // Micrometer registry uses this config; the key is never a property value.
+        // Retain sanitized string resource attributes so safe host/container tags
+        // share the trace/log policy, including private-value redaction.
+        Map<String, String> resourceAttributes = metricResourceAttributes(settings, resource, privacy);
         return new OtlpConfig() {
             @Override public String get(String key) { return null; }
             @Override public String url() { return settings.endpoint + "/v1/metrics"; }
             @Override public Map<String, String> headers() { return settings.headers(); }
-            @Override public Map<String, String> resourceAttributes() { return settings.identity; }
+            @Override public Map<String, String> resourceAttributes() { return resourceAttributes; }
             @Override public Duration step() { return Duration.ofSeconds(30); }
             @Override public Duration connectTimeout() { return Duration.ofSeconds(2); }
             @Override public Duration readTimeout() { return EXPORT_TIMEOUT; }
@@ -82,6 +90,25 @@ public class OpenWoofTelemetryConfiguration {
             @Override public TimeUnit baseTimeUnit() { return TimeUnit.SECONDS; }
             @Override public AggregationTemporality aggregationTemporality() { return AggregationTemporality.CUMULATIVE; }
         };
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(OtlpMeterRegistry.class)
+    WebsiteOtlpMeterRegistry websiteOtlpMeterRegistry(OtlpConfig config, Clock clock) {
+        return new WebsiteOtlpMeterRegistry(config, clock);
+    }
+
+    static Map<String, String> metricResourceAttributes(RuntimeSettings settings, Resource resource, TelemetryPrivacy privacy) {
+        Map<String, String> attributes = new LinkedHashMap<>();
+        privacy.sanitizeResource(resource).getAttributes().forEach((key, value) -> {
+            if (value instanceof String text) {
+                attributes.put(key.getKey(), text);
+            }
+        });
+        // The version, service name, namespace, environment, and detected
+        // container ID are pinned by this application and win on collisions.
+        attributes.putAll(settings.identity);
+        return Map.copyOf(attributes);
     }
 
     @Bean
