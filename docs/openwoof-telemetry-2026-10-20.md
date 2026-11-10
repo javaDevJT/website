@@ -654,10 +654,12 @@ record above remains the existing evidence.
 - `OpenWoofTelemetryConfiguration` copies string-valued attributes from the
   configured OpenTelemetry `Resource` into Micrometer's metrics resource map.
   Application identity values overwrite conflicting resource values, keeping
-  the same identity on traces, logs, and metrics. Other string resource tags
-  remain available on all three signals; non-string values cannot be represented
-  by Micrometer's `OtlpConfig.resourceAttributes()` map and are not copied to
-  metrics.
+  the same identity on traces, logs, and metrics. Safe string resource tags,
+  including `host.name`, remain available on all three signals after the shared
+  privacy filter applies its key filtering, value redaction, and length limits;
+  values do not pass through unchanged by default. Non-string values cannot be
+  represented by Micrometer's `OtlpConfig.resourceAttributes()` map and are not
+  copied to metrics.
 - `WebsiteOtlpMeterRegistry` stops its scheduler, waits for an active scheduled
   publish, and performs one final publish for enabled cumulative metrics before
   delegating shutdown to Micrometer. Existing trace/log queue limits (512),

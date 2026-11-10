@@ -56,6 +56,26 @@ class OpenWoofExportPipelineTest {
     private static String fixtureOrigin;
     @TempDir Path directory;
 
+    private static AutoCloseable enableTelemetryBridgeForFixture() {
+        var rootLogger = (ch.qos.logback.classic.Logger)
+                LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+        var appender = rootLogger.getAppender("OTEL");
+        if (appender instanceof OpenTelemetryAppender telemetryAppender) {
+            var filters = telemetryAppender.getCopyOfAttachedFiltersList().stream()
+                    .filter(TelemetryBridgeFilter.class::isInstance)
+                    .map(TelemetryBridgeFilter.class::cast)
+                    .toList();
+            var previousStates = filters.stream().map(TelemetryBridgeFilter::isEnabled).toList();
+            filters.forEach(filter -> filter.setEnabled(true));
+            return () -> {
+                for (int i = 0; i < filters.size(); i++) {
+                    filters.get(i).setEnabled(previousStates.get(i));
+                }
+            };
+        }
+        return () -> {};
+    }
+
     @Test
     void nativeProvidersBridgeOriginalLogsAndRealOperationsThroughOtlpProtobuf() throws Exception {
         var traces = new ConcurrentLinkedQueue<ExportTraceServiceRequest>();
@@ -104,7 +124,10 @@ class OpenWoofExportPipelineTest {
                 "openwoof.telemetry.enabled", "true",
                 "OPENWOOF_INGEST_KEY_FILE", secret.toString(),
                 "QB_SOURCE_COMMIT", VERSION));
-        try (var context = application.run()) {
+        // Spring contexts share Logback's process-global appender. Restore each
+        // filter's previous state even when application startup or assertions fail.
+        try (var bridgeState = enableTelemetryBridgeForFixture();
+             var context = application.run()) {
             assertEquals(1, context.getBeansOfType(SdkTracerProvider.class).size());
             assertEquals(1, context.getBeansOfType(SdkLoggerProvider.class).size());
             assertEquals(1, context.getBeansOfType(SpanExporter.class).size());

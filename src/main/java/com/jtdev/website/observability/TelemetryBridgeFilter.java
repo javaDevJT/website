@@ -12,6 +12,10 @@ public final class TelemetryBridgeFilter extends Filter<ILoggingEvent> {
         this.enabled = enabled;
     }
 
+    boolean isEnabled() {
+        return enabled;
+    }
+
     @Override
     public FilterReply decide(ILoggingEvent event) {
         String logger = event.getLoggerName();
