@@ -27,6 +27,7 @@ import org.springframework.boot.micrometer.tracing.opentelemetry.autoconfigure.S
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.core.env.Environment;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -50,6 +51,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class OpenWoofExportPipelineTest {
     private static final String KEY = "fixture-only-private-ingest-value";
     private static final String VERSION = "a".repeat(40);
+    private static volatile String resolvedVersion = VERSION;
     private static final String INBOUND_TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
     private static final String INBOUND_PARENT_SPAN_ID = "00f067aa0ba902b7";
     private static final String INBOUND_TRACEPARENT = "00-" + INBOUND_TRACE_ID + "-" + INBOUND_PARENT_SPAN_ID + "-01";
@@ -124,10 +126,12 @@ class OpenWoofExportPipelineTest {
                 "openwoof.telemetry.enabled", "true",
                 "OPENWOOF_INGEST_KEY_FILE", secret.toString(),
                 "QB_SOURCE_COMMIT", VERSION));
+        application.setAdditionalProfiles("test");
         // Spring contexts share Logback's process-global appender. Restore each
         // filter's previous state even when application startup or assertions fail.
         try (var bridgeState = enableTelemetryBridgeForFixture();
              var context = application.run()) {
+            resolvedVersion = context.getEnvironment().getRequiredProperty("QB_SOURCE_COMMIT");
             assertEquals(1, context.getBeansOfType(SdkTracerProvider.class).size());
             assertEquals(1, context.getBeansOfType(SdkLoggerProvider.class).size());
             assertEquals(1, context.getBeansOfType(SpanExporter.class).size());
@@ -145,8 +149,13 @@ class OpenWoofExportPipelineTest {
                     if (path.equals("/api/blog")) {
                         requestBuilder.header("traceparent", INBOUND_TRACEPARENT);
                     }
-                    var response = client.send(requestBuilder.GET().build(), HttpResponse.BodyHandlers.discarding());
+                    var response = client.send(requestBuilder.GET().build(), HttpResponse.BodyHandlers.ofString());
                     assertEquals(200, response.statusCode(), path);
+                    if (path.equals("/actuator/health")) {
+                        assertTrue(response.body().contains("\"status\":\"UP\""), response.body());
+                        assertTrue(response.body().contains("\"sourceCommit\":\"" + resolvedVersion + "\""),
+                                response.body());
+                    }
                 }
             }
             var sdk = context.getBean(OpenTelemetry.class);
@@ -308,7 +317,7 @@ class OpenWoofExportPipelineTest {
     }
 
     private static void assertIdentity(List<io.opentelemetry.proto.common.v1.KeyValue> attributes) {
-        var identity = OpenWoofEnvironmentPostProcessor.identity(VERSION);
+        var identity = OpenWoofEnvironmentPostProcessor.identity(resolvedVersion);
         identity.forEach((key, value) -> assertTrue(attributes.stream().anyMatch(attribute ->
                 attribute.getKey().equals(key) && attribute.getValue().getStringValue().equals(value)), key));
     }
@@ -366,15 +375,16 @@ class OpenWoofExportPipelineTest {
     @TestConfiguration(proxyBeanMethods = false)
     static class FixtureExport {
         @Bean @Primary
-        OpenWoofTelemetryConfiguration.RuntimeSettings fixtureRuntimeSettings() {
+        OpenWoofTelemetryConfiguration.RuntimeSettings fixtureRuntimeSettings(Environment environment) {
             return new OpenWoofTelemetryConfiguration.RuntimeSettings(fixtureOrigin, KEY,
-                    OpenWoofEnvironmentPostProcessor.identity(VERSION));
+                    OpenWoofEnvironmentPostProcessor.identity(environment.getRequiredProperty("QB_SOURCE_COMMIT")));
         }
 
         @Bean @Primary
-        Resource fixtureResource() {
+        Resource fixtureResource(Environment environment) {
             var builder = Resource.builder();
-            OpenWoofEnvironmentPostProcessor.identity(VERSION).forEach(builder::put);
+            OpenWoofEnvironmentPostProcessor.identity(environment.getRequiredProperty("QB_SOURCE_COMMIT"))
+                    .forEach(builder::put);
             return builder.put("host.name", "nas-fixture")
                     .put("custom.runtime.tag", "fixture")
                     .put("password", "fixture-resource-password")

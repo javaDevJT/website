@@ -700,3 +700,42 @@ and `npm run build`); frontend typecheck/build was not part of this run.
 app-local top-level README, whose description now also identifies this local
 release-candidate evidence. No publication, deployment, or live-provider check
 was performed for this patch.
+
+## Local packaged source identity correction (2026-11-11)
+
+The Website image build now validates the supplied `QB_SOURCE_COMMIT` build
+argument as a full 40-character hexadecimal source identifier and writes it to
+the fixed `META-INF/website-source-commit` resource before `clean verify`.
+Maven packages that resource in the same executable JAR that the image runs.
+Application code does not accept a configurable resource path.
+
+`SourceCommit` resolves that packaged value for both `/actuator/health` and the
+OpenWoof environment post-processor. A present malformed resource fails safely
+at startup. When no packaged resource exists, `QB_SOURCE_COMMIT` is accepted
+only under the explicit `local`, `development`, `dev`, or `test` profile; other
+profiles resolve to `unknown`, and enabling telemetry then fails its full
+identity check. When the resource is present, a stale runtime environment
+value cannot override it. The post-processor also pins `QB_SOURCE_COMMIT` to
+the resolved value for the trace, log, and metric providers, keeping
+`service.version` aligned with health while preserving configured safe
+`OTEL_RESOURCE_ATTRIBUTES` and the existing exporter/key behavior.
+
+The packaged smoke now supplies a deliberately conflicting runtime value,
+checks that health keeps Actuator's actual status and reports the packaged
+identity, and checks that all three locally collected OTLP payloads carry that
+same `service.version`. Its collector remains loopback-only and uses synthetic
+fixture key material. This is source/build/test evidence only; it does not
+qualify a new image, change the runtime configuration, or establish deployment
+or persisted telemetry acceptance.
+
+For this local correction, Maven `clean verify` completed with the frontend
+`tsc && vite build` and 28 tests passing (zero failures, errors, or skips). The
+focused resolver/health/environment/pipeline run passed 12 tests. A separate
+verification and packaged telemetry smoke used a synthetic 40-character
+source resource created only under `target/`; all 28 tests passed, and the
+loopback receiver confirmed the same source version on traces, logs, and
+metrics despite a conflicting runtime value. A direct `java -jar` health check
+also kept the packaged fixture identity while returning the actual `UP`
+Actuator status. The synthetic value is test input, not evidence of a trusted
+build or release. Changes remain local and uncommitted; the AMD64 image gate,
+publication, and deployment stay with the release owner.
