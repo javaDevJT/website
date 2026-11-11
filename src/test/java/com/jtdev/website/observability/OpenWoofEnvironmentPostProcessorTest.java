@@ -1,5 +1,6 @@
 package com.jtdev.website.observability;
 
+import io.opentelemetry.sdk.resources.Resource;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.SpringApplication;
@@ -48,14 +49,42 @@ class OpenWoofEnvironmentPostProcessorTest {
                 "management.opentelemetry.resource-attributes[service.name]"));
         assertEquals("a".repeat(40), environment.getProperty(
                 "management.opentelemetry.resource-attributes[service.version]"));
+        assertEquals("host.name=nas-fixture,custom.runtime.tag=fixture",
+                environment.getProperty("OTEL_RESOURCE_ATTRIBUTES"),
+                "the application must not replace owner-configured resource attributes");
         var settings = new OpenWoofTelemetryConfiguration().openWoofRuntimeSettings(environment);
         assertEquals(Map.of("Authorization", "Bearer " + key), settings.headers());
         assertFalse(settings.toString().contains(key));
-        var metrics = new OpenWoofTelemetryConfiguration().websiteMetricExportConfig(settings);
+        var resource = Resource.builder().put("host.name", "nas-fixture")
+                .put("custom.runtime.tag", "fixture").build();
+        var metrics = new OpenWoofTelemetryConfiguration().websiteMetricExportConfig(settings, resource, new TelemetryPrivacy(key));
         assertEquals(settings.headers(), metrics.headers());
-        assertEquals(settings.identity, metrics.resourceAttributes());
+        var expectedAttributes = new HashMap<>(settings.identity);
+        expectedAttributes.put("host.name", "nas-fixture");
+        expectedAttributes.put("custom.runtime.tag", "fixture");
+        assertEquals(expectedAttributes, metrics.resourceAttributes());
         assertEquals(java.util.concurrent.TimeUnit.SECONDS, metrics.baseTimeUnit());
         assertEquals(io.micrometer.registry.otlp.AggregationTemporality.CUMULATIVE, metrics.aggregationTemporality());
+    }
+
+    @Test
+    void identityIncludesOnlyAContainerIdObservedInKnownRuntimeCgroups() {
+        String id = "a".repeat(64);
+        assertEquals(id, OpenWoofEnvironmentPostProcessor.containerIdFromCgroup(
+                "0::/system.slice/docker-" + id + ".scope\n"));
+        assertEquals(id, OpenWoofEnvironmentPostProcessor.containerIdFromCgroup(
+                "0::/kubepods.slice/pod.slice/cri-containerd-" + id + ".scope\n"));
+        assertEquals(id, OpenWoofEnvironmentPostProcessor.containerIdFromCgroup(
+                "12:memory:/libpod/" + id + "\n"));
+        assertNull(OpenWoofEnvironmentPostProcessor.containerIdFromCgroup(
+                "0::/system.slice/website.service\n"));
+        assertNull(OpenWoofEnvironmentPostProcessor.containerIdFromCgroup(
+                "0::/kubepods.slice/pod-" + "b".repeat(32) + ".slice\n"));
+
+        assertEquals(id, OpenWoofEnvironmentPostProcessor.identity("b".repeat(40),
+                "0::/system.slice/docker-" + id + ".scope").get("container.id"));
+        assertFalse(OpenWoofEnvironmentPostProcessor.identity("b".repeat(40), "0::/website.service")
+                .containsKey("container.id"));
     }
 
     @Test
@@ -101,6 +130,7 @@ class OpenWoofEnvironmentPostProcessorTest {
         properties.put("QB_SOURCE_COMMIT", "a".repeat(40));
         properties.put("OTEL_EXPORTER_OTLP_HEADERS", "X-API-Key=conflicting-fixture");
         properties.put("OTEL_EXPORTER_OTLP_LOGS_HEADERS", "X-API-Key=conflicting-fixture");
+        properties.put("OTEL_RESOURCE_ATTRIBUTES", "host.name=nas-fixture,custom.runtime.tag=fixture");
         return properties;
     }
 

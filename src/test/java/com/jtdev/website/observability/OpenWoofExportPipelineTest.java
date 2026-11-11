@@ -17,9 +17,11 @@ import io.opentelemetry.sdk.logs.SdkLoggerProvider;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.export.SpanExporter;
 import io.opentelemetry.sdk.logs.export.LogRecordExporter;
+import io.opentelemetry.sdk.resources.Resource;
 import io.opentelemetry.sdk.trace.samplers.Sampler;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.micrometer.tracing.opentelemetry.autoconfigure.SdkTracerProviderBuilderCustomizer;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -48,8 +50,31 @@ import static org.junit.jupiter.api.Assertions.*;
 class OpenWoofExportPipelineTest {
     private static final String KEY = "fixture-only-private-ingest-value";
     private static final String VERSION = "a".repeat(40);
+    private static final String INBOUND_TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
+    private static final String INBOUND_PARENT_SPAN_ID = "00f067aa0ba902b7";
+    private static final String INBOUND_TRACEPARENT = "00-" + INBOUND_TRACE_ID + "-" + INBOUND_PARENT_SPAN_ID + "-01";
     private static String fixtureOrigin;
     @TempDir Path directory;
+
+    private static AutoCloseable enableTelemetryBridgeForFixture() {
+        var rootLogger = (ch.qos.logback.classic.Logger)
+                LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+        var appender = rootLogger.getAppender("OTEL");
+        if (appender instanceof OpenTelemetryAppender telemetryAppender) {
+            var filters = telemetryAppender.getCopyOfAttachedFiltersList().stream()
+                    .filter(TelemetryBridgeFilter.class::isInstance)
+                    .map(TelemetryBridgeFilter.class::cast)
+                    .toList();
+            var previousStates = filters.stream().map(TelemetryBridgeFilter::isEnabled).toList();
+            filters.forEach(filter -> filter.setEnabled(true));
+            return () -> {
+                for (int i = 0; i < filters.size(); i++) {
+                    filters.get(i).setEnabled(previousStates.get(i));
+                }
+            };
+        }
+        return () -> {};
+    }
 
     @Test
     void nativeProvidersBridgeOriginalLogsAndRealOperationsThroughOtlpProtobuf() throws Exception {
@@ -99,16 +124,28 @@ class OpenWoofExportPipelineTest {
                 "openwoof.telemetry.enabled", "true",
                 "OPENWOOF_INGEST_KEY_FILE", secret.toString(),
                 "QB_SOURCE_COMMIT", VERSION));
-        try (var context = application.run()) {
+        // Spring contexts share Logback's process-global appender. Restore each
+        // filter's previous state even when application startup or assertions fail.
+        try (var bridgeState = enableTelemetryBridgeForFixture();
+             var context = application.run()) {
             assertEquals(1, context.getBeansOfType(SdkTracerProvider.class).size());
             assertEquals(1, context.getBeansOfType(SdkLoggerProvider.class).size());
             assertEquals(1, context.getBeansOfType(SpanExporter.class).size());
             assertEquals(1, context.getBeansOfType(LogRecordExporter.class).size());
+            var rootLogger = (ch.qos.logback.classic.Logger)
+                    LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+            assertNotNull(rootLogger.getAppender("CONSOLE"), "the original console logger must remain attached");
+            assertNotNull(rootLogger.getAppender("OTEL"), "telemetry must be an additive logger appender");
             int applicationPort = context.getEnvironment().getRequiredProperty("local.server.port", Integer.class);
             try (var client = HttpClient.newHttpClient()) {
                 for (String path : List.of("/api/content/portfolio/list", "/api/blog", "/actuator/health")) {
-                    var response = client.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + applicationPort + path))
-                            .timeout(java.time.Duration.ofSeconds(10)).GET().build(), HttpResponse.BodyHandlers.discarding());
+                    HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(
+                                    URI.create("http://127.0.0.1:" + applicationPort + path))
+                            .timeout(java.time.Duration.ofSeconds(10));
+                    if (path.equals("/api/blog")) {
+                        requestBuilder.header("traceparent", INBOUND_TRACEPARENT);
+                    }
+                    var response = client.send(requestBuilder.GET().build(), HttpResponse.BodyHandlers.discarding());
                     assertEquals(200, response.statusCode(), path);
                 }
             }
@@ -138,6 +175,8 @@ class OpenWoofExportPipelineTest {
             var spanRecords = traces.stream().flatMap(message -> message.getResourceSpansList().stream())
                     .flatMap(resource -> resource.getScopeSpansList().stream())
                     .flatMap(scope -> scope.getSpansList().stream()).toList();
+            traces.forEach(message -> message.getResourceSpansList().forEach(resource ->
+                    assertResourceAttributes(resource.getResource().getAttributesList())));
             var catalogue = spanRecords.stream().filter(span -> span.getName().equals("content.catalogue.list"))
                     .filter(span -> hex(span.getTraceId().toByteArray()).equals(request.getSpanContext().getTraceId()))
                     .findFirst().orElseThrow();
@@ -149,13 +188,19 @@ class OpenWoofExportPipelineTest {
             var database = spanRecords.stream().filter(span -> span.getName().equals("blog.database.list"))
                     .findFirst().orElseThrow();
             assertEquals(io.opentelemetry.proto.trace.v1.Span.SpanKind.SPAN_KIND_CLIENT, database.getKind());
-            assertTrue(spanRecords.stream().anyMatch(span -> span.getSpanId().equals(database.getParentSpanId())),
-                    "bounded-elastic repository work must keep the real HTTP parent context");
+            var inboundServer = spanRecords.stream()
+                    .filter(span -> span.getKind() == io.opentelemetry.proto.trace.v1.Span.SpanKind.SPAN_KIND_SERVER)
+                    .filter(span -> hex(span.getTraceId().toByteArray()).equals(INBOUND_TRACE_ID))
+                    .findFirst().orElseThrow(() -> new AssertionError("traceparent must create the inbound server span"));
+            assertEquals(INBOUND_PARENT_SPAN_ID, hex(inboundServer.getParentSpanId().toByteArray()));
+            assertEquals(INBOUND_TRACE_ID, hex(database.getTraceId().toByteArray()));
+            assertEquals(inboundServer.getSpanId(), database.getParentSpanId(),
+                    "bounded-elastic repository I/O must keep the extracted HTTP parent context");
             assertFalse(spanRecords.stream().anyMatch(span -> span.getName().contains("/actuator/health")));
 
             var originalLogs = new ArrayList<LogRecord>();
             logs.forEach(message -> message.getResourceLogsList().forEach(resource -> {
-                assertIdentity(resource.getResource().getAttributesList());
+                assertResourceAttributes(resource.getResource().getAttributesList());
                 resource.getScopeLogsList().forEach(scope -> {
                     if (scope.getScope().getName().equals(ContentService.class.getName())) {
                         originalLogs.addAll(scope.getLogRecordsList());
@@ -182,10 +227,12 @@ class OpenWoofExportPipelineTest {
                     .anyMatch(record -> record.getBody().getStringValue().contains("Started")
                             && record.getBody().getStringValue().contains("in")), "real startup records must survive early buffering");
 
-            var operationMetrics = metrics.stream().flatMap(message -> message.getResourceMetricsList().stream())
-                    .peek(resource -> assertIdentity(resource.getResource().getAttributesList()))
+            var metricRecords = metrics.stream().flatMap(message -> message.getResourceMetricsList().stream())
+                    .peek(resource -> assertResourceAttributes(resource.getResource().getAttributesList()))
                     .flatMap(resource -> resource.getScopeMetricsList().stream())
                     .flatMap(scope -> scope.getMetricsList().stream())
+                    .toList();
+            var operationMetrics = metricRecords.stream()
                     .filter(metric -> metric.getName().equals("website.operation.duration")).toList();
             assertFalse(operationMetrics.isEmpty(), "actual operation durations must reach OTLP");
             operationMetrics.forEach(metric -> {
@@ -193,8 +240,15 @@ class OpenWoofExportPipelineTest {
                 assertTrue(metric.hasHistogram());
                 assertEquals(AggregationTemporality.AGGREGATION_TEMPORALITY_CUMULATIVE,
                         metric.getHistogram().getAggregationTemporality());
-                assertTrue(metric.getHistogram().getDataPointsList().stream().anyMatch(point -> point.getCount() > 0));
+                assertTrue(metric.getHistogram().getDataPointsList().stream()
+                        .anyMatch(point -> point.getCount() > 0 && point.getSum() > 0));
             });
+            assertTrue(metricRecords.stream().anyMatch(metric -> metric.getName().equals("http.server.requests")
+                            && hasPositiveDurationSamples(metric)),
+                    "real request counters and durations must reach OTLP");
+            assertTrue(metricRecords.stream().anyMatch(metric -> metric.getName().equals("jvm.memory.used")
+                            && hasPositiveMetricSamples(metric)),
+                    "runtime memory metrics must reach OTLP");
             assertFalse(headers.isEmpty());
             assertTrue(headers.stream().allMatch(value -> value.equals(List.of("Bearer " + KEY))));
             assertTrue(contentTypes.stream().allMatch(value -> value.startsWith("application/x-protobuf")));
@@ -220,16 +274,89 @@ class OpenWoofExportPipelineTest {
             }
             receiverStatus.set(200);
             assertTrue(context.getBean(SdkTracerProvider.class).forceFlush().join(10, TimeUnit.SECONDS).isSuccess());
+            assertFalse(logs.stream().flatMap(message -> message.getResourceLogsList().stream())
+                            .flatMap(resource -> resource.getScopeLogsList().stream())
+                            .anyMatch(scope -> scope.getScope().getName().startsWith("io.opentelemetry.")
+                                    || scope.getScope().getName().startsWith("io.micrometer.registry.otlp.")),
+                    "export failure diagnostics must stay on the original console path without recursing into OTLP");
+
+            Span shutdownSpan = sdk.getTracer("website.shutdown.fixture").spanBuilder("website.shutdown.flush").startSpan();
+            shutdownSpan.end();
+            LoggerFactory.getLogger("website.shutdown.fixture").warn("website shutdown flush fixture");
+            registry.counter("website.shutdown.flush").increment();
         } finally {
             OpenTelemetryAppender.install(OpenTelemetry.noop());
             receiver.stop(0);
         }
+
+        assertTrue(traces.stream().flatMap(message -> message.getResourceSpansList().stream())
+                        .flatMap(resource -> resource.getScopeSpansList().stream())
+                        .flatMap(scope -> scope.getSpansList().stream())
+                        .anyMatch(span -> span.getName().equals("website.shutdown.flush")),
+                "context shutdown must flush the final span batch");
+        assertTrue(logs.stream().flatMap(message -> message.getResourceLogsList().stream())
+                        .flatMap(resource -> resource.getScopeLogsList().stream())
+                        .flatMap(scope -> scope.getLogRecordsList().stream())
+                        .anyMatch(record -> record.getBody().getStringValue().equals("website shutdown flush fixture")),
+                "context shutdown must flush the final log batch");
+        assertTrue(metrics.stream().flatMap(message -> message.getResourceMetricsList().stream())
+                        .flatMap(resource -> resource.getScopeMetricsList().stream())
+                        .flatMap(scope -> scope.getMetricsList().stream())
+                        .anyMatch(metric -> metric.getName().equals("website.shutdown.flush")
+                                && hasPositiveMetricSamples(metric)),
+                "context shutdown must publish the final cumulative metric interval");
     }
 
     private static void assertIdentity(List<io.opentelemetry.proto.common.v1.KeyValue> attributes) {
         var identity = OpenWoofEnvironmentPostProcessor.identity(VERSION);
         identity.forEach((key, value) -> assertTrue(attributes.stream().anyMatch(attribute ->
                 attribute.getKey().equals(key) && attribute.getValue().getStringValue().equals(value)), key));
+    }
+
+    private static void assertResourceAttributes(List<io.opentelemetry.proto.common.v1.KeyValue> attributes) {
+        assertIdentity(attributes);
+        assertTrue(hasAttribute(attributes, "host.name", "nas-fixture"));
+        assertTrue(hasAttribute(attributes, "custom.runtime.tag", "fixture"));
+        assertTrue(attributes.stream().noneMatch(attribute -> List.of("password", "url.path", "url.query")
+                .contains(attribute.getKey())), "sensitive resource keys must be excluded on every signal");
+        String note = attributes.stream().filter(attribute -> attribute.getKey().equals("custom.runtime.note"))
+                .map(attribute -> attribute.getValue().getStringValue()).findFirst().orElseThrow();
+        assertTrue(note.contains("[REDACTED]"), "safe custom metadata retains useful redacted detail");
+        for (String value : List.of(KEY, "person@example.test", "192.0.2.123")) {
+            assertFalse(note.contains(value), "resource values must share the export privacy policy");
+        }
+    }
+
+    private static boolean hasAttribute(
+            List<io.opentelemetry.proto.common.v1.KeyValue> attributes, String key, String value) {
+        return attributes.stream().anyMatch(attribute -> attribute.getKey().equals(key)
+                && attribute.getValue().getStringValue().equals(value));
+    }
+
+    private static boolean hasPositiveMetricSamples(io.opentelemetry.proto.metrics.v1.Metric metric) {
+        if (metric.hasHistogram() && metric.getHistogram().getDataPointsList().stream()
+                .anyMatch(point -> point.getCount() > 0)) {
+            return true;
+        }
+        if (metric.hasSummary() && metric.getSummary().getDataPointsList().stream()
+                .anyMatch(point -> point.getCount() > 0)) {
+            return true;
+        }
+        if (metric.hasGauge()) {
+            return metric.getGauge().getDataPointsList().stream()
+                    .anyMatch(point -> point.getAsDouble() > 0 || point.getAsInt() > 0);
+        }
+        return metric.hasSum() && metric.getSum().getDataPointsList().stream()
+                .anyMatch(point -> point.getAsDouble() > 0 || point.getAsInt() > 0);
+    }
+
+    private static boolean hasPositiveDurationSamples(io.opentelemetry.proto.metrics.v1.Metric metric) {
+        if (metric.hasHistogram()) {
+            return metric.getHistogram().getDataPointsList().stream()
+                    .anyMatch(point -> point.getCount() > 0 && point.getSum() > 0);
+        }
+        return metric.hasSummary() && metric.getSummary().getDataPointsList().stream()
+                .anyMatch(point -> point.getCount() > 0 && point.getSum() > 0);
     }
 
     private static String hex(byte[] bytes) {
@@ -242,6 +369,19 @@ class OpenWoofExportPipelineTest {
         OpenWoofTelemetryConfiguration.RuntimeSettings fixtureRuntimeSettings() {
             return new OpenWoofTelemetryConfiguration.RuntimeSettings(fixtureOrigin, KEY,
                     OpenWoofEnvironmentPostProcessor.identity(VERSION));
+        }
+
+        @Bean @Primary
+        Resource fixtureResource() {
+            var builder = Resource.builder();
+            OpenWoofEnvironmentPostProcessor.identity(VERSION).forEach(builder::put);
+            return builder.put("host.name", "nas-fixture")
+                    .put("custom.runtime.tag", "fixture")
+                    .put("password", "fixture-resource-password")
+                    .put("url.path", "/fixture-resource-private-path")
+                    .put("url.query", "token=fixture-resource-query")
+                    .put("custom.runtime.note", "Authorization=Bearer " + KEY + " person@example.test 192.0.2.123")
+                    .build();
         }
 
         @Bean

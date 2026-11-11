@@ -29,6 +29,8 @@ mkdir -p "$smoke_dir/classes/$helper_package"
 cp "$project_root/target/test-classes/$helper_package/PackagedRuntimeTelemetrySmoke"*.class \
     "$smoke_dir/classes/$helper_package/"
 
+export OTEL_RESOURCE_ATTRIBUTES='host.name=website-smoke-host,fixture.safe=packaged-safe-tag,fixture.contact=resource-person@example.net,user.email=filtered-person@example.net'
+
 if ! java \
     -Dloader.path="$smoke_dir/classes" \
     -Dloader.main=com.jtdev.website.observability.PackagedRuntimeTelemetrySmoke \

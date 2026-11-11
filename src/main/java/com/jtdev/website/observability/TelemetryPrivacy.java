@@ -330,7 +330,8 @@ public final class TelemetryPrivacy {
         return value.substring(0, visibleLength) + TRUNCATED;
     }
 
-    private Resource sanitizeResource(Resource resource) {
+    /** Shared resource policy for trace, log and Micrometer metric exporters. */
+    Resource sanitizeResource(Resource resource) {
         return Resource.create(sanitizeAttributes(resource.getAttributes()), resource.getSchemaUrl());
     }
 

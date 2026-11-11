@@ -633,3 +633,70 @@ packaged-classpath isolation, test-helper exclusion, external-network isolation
 or cleanup. `git diff --check` passed. The corrected release will retain all
 existing CI/security/receipt gates and reuse the already delivered credential
 through a guarded configuration-only promotion; initial delivery is not replayed.
+
+## Local release-candidate patch (2026-11-08)
+
+This source-only candidate is based on `1e96f49128d54155b7ca9c4d5a61e5c04bd028ce`
+in the isolated `codex/openwoof-telemetry-20261108` worktree. It remains local
+and uncommitted. It did not change the deployed container, saved application
+settings, credentials, or persisted telemetry; the deployment and acceptance
+record above remains the existing evidence.
+
+### Configuration and source delta
+
+- `OpenWoofEnvironmentPostProcessor` now leaves owner-supplied
+  `OTEL_RESOURCE_ATTRIBUTES` intact while continuing to pin the application's
+  service name, namespace, environment, and full source version through Spring
+  resource properties. `container.id` is added only when `/proc/self/cgroup`
+  contains a full 64-hex ID in a recognized `docker`, `cri-containerd`,
+  `containerd`, or `libpod` path form. Missing or unrecognized cgroup data adds
+  no container ID; no host value is inferred.
+- `OpenWoofTelemetryConfiguration` copies string-valued attributes from the
+  configured OpenTelemetry `Resource` into Micrometer's metrics resource map.
+  Application identity values overwrite conflicting resource values, keeping
+  the same identity on traces, logs, and metrics. Safe string resource tags,
+  including `host.name`, remain available on all three signals after the shared
+  privacy filter applies its key filtering, value redaction, and length limits;
+  values do not pass through unchanged by default. Non-string values cannot be
+  represented by Micrometer's `OtlpConfig.resourceAttributes()` map and are not
+  copied to metrics.
+- `WebsiteOtlpMeterRegistry` stops its scheduler, waits for an active scheduled
+  publish, and performs one final publish for enabled cumulative metrics before
+  delegating shutdown to Micrometer. Existing trace/log queue limits (512),
+  batch limits (64), five-second schedule/export settings, metric batch limit
+  (128), 30-second step, and two-second connect/five-second read timeouts remain
+  in force; no extra queue or exporter thread was added.
+- Runtime configuration needs do not change: telemetry remains opt-in, requires
+  the image's full 40-character `QB_SOURCE_COMMIT`, the existing owner-only
+  `OPENWOOF_INGEST_KEY_FILE`, and the validated HTTPS OTLP origin with
+  `http/protobuf`. Optional custom string tags continue to use
+  `OTEL_RESOURCE_ATTRIBUTES`; application identity wins on key collisions.
+
+### Local regression and verification
+
+The controlled loopback pipeline now supplies a W3C `traceparent` to a real
+`/api/blog` HTTP request, verifies the server span and asynchronous H2/JPA read
+share that trace, checks the existing root `CONSOLE` appender remains attached
+alongside `OTEL`, and asserts configured string resource attributes are present
+on trace, log, and metric payloads. It also checks real HTTP request duration and
+JVM memory metrics, then closes the Spring context and verifies the final span,
+log, and cumulative metric are delivered. Its OTLP receiver binds to
+`127.0.0.1`; it uses a temporary fixture key and makes no OpenWoof or TrueNAS
+request. The environment test separately verifies that
+`OTEL_RESOURCE_ATTRIBUTES` survives processing and that only full IDs from the
+recognized cgroup formats are accepted.
+
+Backend command and result:
+
+```text
+./mvnw --batch-mode --no-transfer-progress -Dexec.skip=true test
+Tests run: 24, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+```
+
+`-Dexec.skip=true` skips both `exec-maven-plugin` frontend executions (`npm ci`
+and `npm run build`); frontend typecheck/build was not part of this run.
+`git diff --check` passed. The telemetry record is already linked from the
+app-local top-level README, whose description now also identifies this local
+release-candidate evidence. No publication, deployment, or live-provider check
+was performed for this patch.

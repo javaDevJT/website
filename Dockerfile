@@ -61,6 +61,8 @@ COPY --from=zlib-build /home/builder/.abuild/*.rsa.pub /etc/apk/keys/
 # BuildKit stores snapshots on tmpfs; exported OCI layers preserve this APK DB.
 RUN apk --root-tmpfs=no upgrade --no-cache && \
     apk --root-tmpfs=no add --no-cache /tmp/zlib.apk /tmp/dash.apk && rm /tmp/zlib.apk /tmp/dash.apk && \
+    apk list --installed zlib | grep -Eq '^zlib-1[.]4-r0[[:space:]]' && \
+    test -L /usr/lib/libz.so.1 && test -e /usr/lib/libz.so.1 && \
     apk --root-tmpfs=no add --no-cache ca-certificates libstdc++ fontconfig font-dejavu && \
     addgroup -g 1001 -S spring && \
     adduser -u 1001 -S spring -G spring && \

@@ -6,6 +6,9 @@ import com.sun.net.httpserver.HttpServer;
 import io.micrometer.registry.otlp.OtlpMeterRegistry;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.proto.collector.logs.v1.ExportLogsServiceRequest;
+import io.opentelemetry.proto.collector.metrics.v1.ExportMetricsServiceRequest;
+import io.opentelemetry.proto.collector.trace.v1.ExportTraceServiceRequest;
 import io.opentelemetry.sdk.logs.SdkLoggerProvider;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import org.slf4j.LoggerFactory;
@@ -40,6 +43,10 @@ import java.util.concurrent.TimeUnit;
 public final class PackagedRuntimeTelemetrySmoke {
     private static final String VERSION = "a".repeat(40);
     private static final String KEY = "packaged-runtime-smoke-fixture-key";
+    private static final String RESOURCE_EMAIL = "resource-person@example.net";
+    private static final String FILTERED_EMAIL = "filtered-person@example.net";
+    private static final String TRACE_EMAIL = "trace-person@example.net";
+    private static final String LOG_EMAIL = "log-person@example.net";
     private static final ConcurrentLinkedQueue<ReceivedExport> EXPORTS = new ConcurrentLinkedQueue<>();
     private static volatile String fixtureOrigin;
 
@@ -94,9 +101,10 @@ public final class PackagedRuntimeTelemetrySmoke {
                 OpenTelemetry telemetry = context.getBean(OpenTelemetry.class);
                 Span span = telemetry.getTracer("website.packaged-runtime-smoke")
                         .spanBuilder("packaged.runtime.smoke").startSpan();
+                span.setAttribute("fixture.trace", TRACE_EMAIL);
                 span.end();
                 LoggerFactory.getLogger(PackagedRuntimeTelemetrySmoke.class)
-                        .warn("packaged runtime telemetry fixture log");
+                        .warn("packaged runtime telemetry fixture email={}", LOG_EMAIL);
 
                 OtlpMeterRegistry registry = context.getBean(OtlpMeterRegistry.class);
                 registry.counter("packaged.runtime.smoke").increment();
@@ -120,6 +128,31 @@ public final class PackagedRuntimeTelemetrySmoke {
                             signal + " export did not use OTLP protobuf");
                     require(exported.authorization().equals("Bearer " + KEY),
                             signal + " export did not use the harmless fixture key");
+                    require(exported.bodyText().contains("host.name")
+                                    && exported.bodyText().contains("website-smoke-host"),
+                            signal + " export lost the safe host.name resource tag");
+                    require(exported.bodyText().contains("fixture.safe")
+                                    && exported.bodyText().contains("packaged-safe-tag"),
+                            signal + " export lost the safe custom resource tag");
+                    require(exported.bodyText().contains("fixture.contact")
+                                    && exported.bodyText().contains("[REDACTED]"),
+                            signal + " export did not redact the safe-key resource value");
+                    require(!exported.bodyText().contains(RESOURCE_EMAIL)
+                                    && !exported.bodyText().contains(FILTERED_EMAIL)
+                                    && !exported.bodyText().contains("user.email"),
+                            signal + " export leaked or retained a filtered resource value");
+                    if (signal.equals("traces")) {
+                        require(exported.fixtureTraceRedacted(),
+                                "trace export lost the fixture span or its redacted attribute");
+                        require(!exported.bodyText().contains(TRACE_EMAIL),
+                                "trace export leaked a private span attribute");
+                    }
+                    if (signal.equals("logs")) {
+                        require(exported.fixtureLogRedacted(),
+                                "log export lost the fixture record or its redacted message");
+                        require(!exported.bodyText().contains(LOG_EMAIL),
+                                "log export leaked a private log body value");
+                    }
                 }
             } finally {
                 io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender.install(OpenTelemetry.noop());
@@ -134,9 +167,36 @@ public final class PackagedRuntimeTelemetrySmoke {
 
     private static void receive(HttpExchange exchange) throws IOException {
         byte[] body = exchange.getRequestBody().readAllBytes();
+        boolean fixtureTraceRedacted = false;
+        boolean fixtureLogRedacted = false;
+        String bodyText = switch (exchange.getRequestURI().getPath()) {
+            case "/v1/traces" -> {
+                var request = ExportTraceServiceRequest.parseFrom(body);
+                fixtureTraceRedacted = request.getResourceSpansList().stream()
+                        .flatMap(resource -> resource.getScopeSpansList().stream())
+                        .flatMap(scope -> scope.getSpansList().stream())
+                        .anyMatch(span -> span.getName().equals("packaged.runtime.smoke")
+                                && span.getAttributesList().stream().anyMatch(attribute ->
+                                attribute.getKey().equals("fixture.trace")
+                                        && attribute.getValue().getStringValue().equals("[REDACTED]")));
+                yield request.toString();
+            }
+            case "/v1/logs" -> {
+                var request = ExportLogsServiceRequest.parseFrom(body);
+                fixtureLogRedacted = request.getResourceLogsList().stream()
+                        .flatMap(resource -> resource.getScopeLogsList().stream())
+                        .flatMap(scope -> scope.getLogRecordsList().stream())
+                        .anyMatch(record -> record.getBody().getStringValue()
+                                .equals("packaged runtime telemetry fixture email=[REDACTED]"));
+                yield request.toString();
+            }
+            case "/v1/metrics" -> ExportMetricsServiceRequest.parseFrom(body).toString();
+            default -> throw new IOException("unexpected packaged telemetry signal path");
+        };
         EXPORTS.add(new ReceivedExport(exchange.getRequestURI().getPath(),
                 exchange.getRequestHeaders().getFirst("Content-Type"),
-                exchange.getRequestHeaders().getFirst("Authorization"), body.length));
+                exchange.getRequestHeaders().getFirst("Authorization"), body.length, bodyText,
+                fixtureTraceRedacted, fixtureLogRedacted));
         exchange.getResponseHeaders().set("Content-Type", "application/x-protobuf");
         exchange.sendResponseHeaders(200, -1);
         exchange.close();
@@ -146,6 +206,8 @@ public final class PackagedRuntimeTelemetrySmoke {
         if (!condition) throw new IllegalStateException(message);
     }
 
-    private record ReceivedExport(String path, String contentType, String authorization, int bodyBytes) {}
+    private record ReceivedExport(String path, String contentType, String authorization,
+                                  int bodyBytes, String bodyText,
+                                  boolean fixtureTraceRedacted, boolean fixtureLogRedacted) {}
 
 }
