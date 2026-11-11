@@ -1,5 +1,6 @@
 package com.jtdev.website.observability;
 
+import com.jtdev.website.SourceCommit;
 import com.jtdev.website.WebsiteApplication;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -41,7 +42,6 @@ import java.util.concurrent.TimeUnit;
  * This class is only copied to a temporary loader path by the smoke script.
  */
 public final class PackagedRuntimeTelemetrySmoke {
-    private static final String VERSION = "a".repeat(40);
     private static final String KEY = "packaged-runtime-smoke-fixture-key";
     private static final String RESOURCE_EMAIL = "resource-person@example.net";
     private static final String FILTERED_EMAIL = "filtered-person@example.net";
@@ -53,6 +53,17 @@ public final class PackagedRuntimeTelemetrySmoke {
     private PackagedRuntimeTelemetrySmoke() {}
 
     public static void main(String[] args) throws Exception {
+        String expectedVersion = System.getProperty("website.smoke.expected-source-commit");
+        String staleVersion = System.getProperty("website.smoke.stale-source-commit");
+        boolean packagedIdentityExpected = Boolean.parseBoolean(
+                System.getProperty("website.smoke.packaged-source-present", "false"));
+        require(expectedVersion != null && expectedVersion.matches("[0-9a-f]{40}"),
+                "smoke script did not supply a full expected source identity");
+        require(staleVersion != null && staleVersion.matches("[0-9a-f]{40}"),
+                "smoke script did not supply a full configured source identity");
+        require(!packagedIdentityExpected || !expectedVersion.equals(staleVersion),
+                "packaged identity smoke requires a conflicting mutable source value");
+
         Path keyFile = Files.createTempFile("website-telemetry-fixture-", ".key");
         Files.writeString(keyFile, KEY, StandardCharsets.UTF_8);
         Files.setPosixFilePermissions(keyFile, PosixFilePermissions.fromString("rw-------"));
@@ -65,12 +76,15 @@ public final class PackagedRuntimeTelemetrySmoke {
 
         try {
             ConfigurableEnvironment environment = new StandardEnvironment();
+            environment.setActiveProfiles("test");
             environment.getPropertySources().addFirst(new MapPropertySource("packagedTelemetrySmoke", Map.of(
                     "openwoof.telemetry.enabled", "true",
                     "OPENWOOF_INGEST_KEY_FILE", keyFile.toString(),
-                    "QB_SOURCE_COMMIT", VERSION,
+                    "QB_SOURCE_COMMIT", staleVersion,
                     "spring.main.web-application-type", "reactive",
                     "server.port", "0")));
+            require(SourceCommit.resolve(environment).equals(expectedVersion),
+                    "source resolver did not select the expected packaged/development identity");
             SpringApplication application = new SpringApplication(WebsiteApplication.class);
             application.setEnvironment(environment);
             application.addInitializers(context -> context.addBeanFactoryPostProcessor(beanFactory -> {
@@ -78,18 +92,31 @@ public final class PackagedRuntimeTelemetrySmoke {
                         beanFactory.getBeanDefinition("openWoofRuntimeSettings");
                 settings.setPrimary(true);
                 settings.setInstanceSupplier(() -> new OpenWoofTelemetryConfiguration.RuntimeSettings(fixtureOrigin,
-                        KEY, OpenWoofEnvironmentPostProcessor.identity(VERSION)));
+                        KEY, OpenWoofEnvironmentPostProcessor.identity(
+                        environment.getRequiredProperty("QB_SOURCE_COMMIT"))));
                 ((DefaultListableBeanFactory) beanFactory).registerSingleton("packagedRuntimeFixtureSampler",
                         (SdkTracerProviderBuilderCustomizer) builder -> builder.setSampler(
                                 io.opentelemetry.sdk.trace.samplers.Sampler.alwaysOn()));
             }));
 
             try (var context = application.run()) {
+                require(context.getEnvironment().getRequiredProperty("QB_SOURCE_COMMIT").equals(expectedVersion),
+                        "runtime configuration did not pin the resolved source identity");
                 context.getBean(SdkTracerProvider.class);
                 context.getBean(SdkLoggerProvider.class);
                 context.getBean(OtlpMeterRegistry.class);
 
                 int port = context.getEnvironment().getRequiredProperty("local.server.port", Integer.class);
+                HttpRequest healthRequest = HttpRequest.newBuilder(URI.create(
+                                "http://127.0.0.1:" + port + "/actuator/health"))
+                        .timeout(Duration.ofSeconds(15)).GET().build();
+                HttpResponse<String> health = HttpClient.newHttpClient().send(healthRequest,
+                        HttpResponse.BodyHandlers.ofString());
+                require(health.statusCode() == 200, "packaged application health returned " + health.statusCode());
+                require(health.body().contains("\"status\":\"UP\""),
+                        "packaged health did not preserve the actual Actuator status");
+                require(health.body().contains("\"sourceCommit\":\"" + expectedVersion + "\""),
+                        "packaged health did not report the expected source identity");
                 HttpRequest request = HttpRequest.newBuilder(URI.create(
                                 "http://127.0.0.1:" + port + "/api/content/portfolio/list"))
                         .timeout(Duration.ofSeconds(15)).GET().build();
@@ -137,6 +164,9 @@ public final class PackagedRuntimeTelemetrySmoke {
                     require(exported.bodyText().contains("fixture.contact")
                                     && exported.bodyText().contains("[REDACTED]"),
                             signal + " export did not redact the safe-key resource value");
+                    require(exported.bodyText().contains("service.version")
+                                    && exported.bodyText().contains(expectedVersion),
+                            signal + " export did not use the expected packaged source identity");
                     require(!exported.bodyText().contains(RESOURCE_EMAIL)
                                     && !exported.bodyText().contains(FILTERED_EMAIL)
                                     && !exported.bodyText().contains("user.email"),

@@ -5,6 +5,7 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferUtils;
+import org.springframework.core.env.Environment;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.server.reactive.ServerHttpResponse;
@@ -23,9 +24,8 @@ import java.nio.charset.StandardCharsets;
 public class HealthSourceResponseFilter implements WebFilter {
     private final String sourceCommit;
 
-    public HealthSourceResponseFilter(
-            @org.springframework.beans.factory.annotation.Value("${QB_SOURCE_COMMIT:unknown}") String sourceCommit) {
-        this.sourceCommit = SourceCommit.normalize(sourceCommit);
+    public HealthSourceResponseFilter(Environment environment) {
+        this.sourceCommit = SourceCommit.resolve(environment);
     }
 
     @Override

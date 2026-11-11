@@ -35,6 +35,14 @@ COPY src ./src
 COPY scripts/telemetry-runtime-smoke.sh ./scripts/telemetry-runtime-smoke.sh
 
 FROM backend-build AS backend-check
+ARG QB_SOURCE_COMMIT=unknown
+# Bind this verified build input into the same JAR that the image publishes.
+# The resource path is fixed in application code; runtime configuration cannot
+# select or replace it.
+RUN printf '%s' "$QB_SOURCE_COMMIT" | grep -Eiq '^[[:xdigit:]]{40}$' && \
+    mkdir -p src/main/resources/META-INF && \
+    printf '%s\n' "$QB_SOURCE_COMMIT" | tr '[:upper:]' '[:lower:]' \
+      > src/main/resources/META-INF/website-source-commit
 # Run the same backend tests and frontend checks used for local verification.
 RUN ./mvnw --batch-mode --no-transfer-progress -DfailIfNoTests=true clean verify && \
     sh ./scripts/telemetry-runtime-smoke.sh && \
@@ -83,6 +91,7 @@ ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
 # Run the packaged app as the production UID to verify the linked Java modules,
 # PDF extraction, content parsing, and the actual generated web assets.
 FROM runtime-base AS smoke-test
+ARG QB_SOURCE_COMMIT=unknown
 RUN --network=none --mount=type=bind,from=node-toolchain,source=/bin/busybox,target=/tmp/busybox \
     set -eu; \
     /tmp/busybox mkdir /tmp/website-smoke-tools; \
@@ -106,7 +115,13 @@ RUN --network=none --mount=type=bind,from=node-toolchain,source=/bin/busybox,tar
     test "$(stat -c %u "$fixture_key")" = 1001; \
     export OPENWOOF_TELEMETRY_ENABLED=true; \
     export OPENWOOF_INGEST_KEY_FILE="$fixture_key"; \
-    export QB_SOURCE_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; \
+    expected_source_commit="$(printf '%s' "$QB_SOURCE_COMMIT" | tr '[:upper:]' '[:lower:]')"; \
+    case "$expected_source_commit" in \
+      b*) stale_source_commit="a${expected_source_commit#?}" ;; \
+      *) stale_source_commit="b${expected_source_commit#?}" ;; \
+    esac; \
+    test "$expected_source_commit" != "$stale_source_commit"; \
+    export QB_SOURCE_COMMIT="$stale_source_commit"; \
     java -version; \
     java $JAVA_OPTS -jar /app/app.jar > /tmp/website-smoke.log 2>&1 & \
     app_pid=$!; \
@@ -119,6 +134,7 @@ RUN --network=none --mount=type=bind,from=node-toolchain,source=/bin/busybox,tar
     done; \
     if [ "$attempt" -ge 60 ]; then cat /tmp/website-smoke.log; exit 1; fi; \
     grep -Eq '"status"[[:space:]]*:[[:space:]]*"UP"' /tmp/website-health.json; \
+    grep -Eq "\"sourceCommit\"[[:space:]]*:[[:space:]]*\"$expected_source_commit\"" /tmp/website-health.json; \
     /opt/java/bin/java -Xms8m -Xmx32m -XX:+UseSerialGC -XX:ActiveProcessorCount=1 -cp /app WebsiteHealthcheck; \
     wget -T 5 -qO /tmp/website-client-info.json http://127.0.0.1:8080/api/client/info; \
     grep -Eq '"hostname"[[:space:]]*:[[:space:]]*"javadevjt[.]tech"' /tmp/website-client-info.json; \

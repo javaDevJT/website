@@ -1,5 +1,6 @@
 package com.jtdev.website.observability;
 
+import com.jtdev.website.SourceCommit;
 import io.opentelemetry.sdk.resources.Resource;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -31,6 +32,7 @@ class OpenWoofEnvironmentPostProcessorTest {
     void enabledExportBindsOneIdentityAndNeverStoresTheKeyInTheEnvironment() throws Exception {
         String key = "fixture-private-ingest-value";
         var environment = environment(enabled(key));
+        String expectedVersion = SourceCommit.resolve(environment);
         process(environment);
         assertEquals("true", environment.getProperty("management.opentelemetry.enabled"));
         assertEquals("http/protobuf", environment.getProperty("OTEL_EXPORTER_OTLP_PROTOCOL"));
@@ -47,7 +49,8 @@ class OpenWoofEnvironmentPostProcessorTest {
         assertFalse(source.getSource().values().stream().anyMatch(value -> value.toString().contains(key)));
         assertEquals("website-backend", environment.getProperty(
                 "management.opentelemetry.resource-attributes[service.name]"));
-        assertEquals("a".repeat(40), environment.getProperty(
+        assertEquals(expectedVersion, environment.getProperty("QB_SOURCE_COMMIT"));
+        assertEquals(expectedVersion, environment.getProperty(
                 "management.opentelemetry.resource-attributes[service.version]"));
         assertEquals("host.name=nas-fixture,custom.runtime.tag=fixture",
                 environment.getProperty("OTEL_RESOURCE_ATTRIBUTES"),
@@ -117,7 +120,25 @@ class OpenWoofEnvironmentPostProcessorTest {
         assertThrows(IllegalStateException.class, () -> process(environment(protocol)));
         var unknown = enabled("valid-fixture");
         unknown.put("QB_SOURCE_COMMIT", "unknown");
-        assertThrows(IllegalStateException.class, () -> process(environment(unknown)));
+        var unknownEnvironment = environment(unknown);
+        String resolved = SourceCommit.resolve(unknownEnvironment);
+        if ("unknown".equals(resolved)) {
+            assertThrows(IllegalStateException.class, () -> process(unknownEnvironment));
+        } else {
+            process(unknownEnvironment);
+            assertEquals(resolved, unknownEnvironment.getProperty("QB_SOURCE_COMMIT"),
+                    "a packaged identity must override an invalid mutable fallback");
+        }
+    }
+
+    @Test
+    void runtimeCommitOutsideDevelopmentProfileIsNotTrustedWithoutPackagedIdentity() {
+        var environment = new StandardEnvironment();
+        environment.getPropertySources().addFirst(new MapPropertySource("fixture",
+                Map.of("QB_SOURCE_COMMIT", "a".repeat(40))));
+        String expected = SourceCommit.resolve(environment);
+        process(environment);
+        assertEquals(expected, environment.getProperty("QB_SOURCE_COMMIT"));
     }
 
     private Map<String, Object> enabled(String key) throws Exception {
@@ -136,6 +157,7 @@ class OpenWoofEnvironmentPostProcessorTest {
 
     private StandardEnvironment environment(Map<String, Object> properties) {
         var environment = new StandardEnvironment();
+        environment.setActiveProfiles("test");
         environment.getPropertySources().addFirst(new MapPropertySource("fixture", properties));
         return environment;
     }

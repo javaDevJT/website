@@ -1,5 +1,6 @@
 package com.jtdev.website.observability;
 
+import com.jtdev.website.SourceCommit;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.EnvironmentPostProcessor;
 import org.springframework.core.Ordered;
@@ -45,14 +46,18 @@ public final class OpenWoofEnvironmentPostProcessor implements EnvironmentPostPr
         properties.put("management.opentelemetry.enabled", active);
         properties.put("management.otlp.metrics.export.enabled", active);
         properties.put("management.tracing.export.otlp.enabled", active);
+        String version = SourceCommit.resolve(environment);
+        // All providers, including the custom Micrometer registry, consume the
+        // same value as the health response. The packaged resource overrides a
+        // stale QB_SOURCE_COMMIT injected by mutable runtime configuration.
+        properties.put("QB_SOURCE_COMMIT", version);
         if (active) {
             validateEndpoint(environment.getProperty("OTEL_EXPORTER_OTLP_ENDPOINT", ENDPOINT));
             if (!"http/protobuf".equals(environment.getProperty("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf"))) {
                 throw new IllegalStateException("OpenWoof requires OTLP HTTP/protobuf");
             }
-            String version = environment.getProperty("QB_SOURCE_COMMIT", "unknown");
             if (!version.matches("[0-9a-f]{40}")) {
-                throw new IllegalStateException("OpenWoof requires the image's full source commit identity");
+                throw new IllegalStateException("OpenWoof requires a full packaged source commit identity");
             }
             // Validate the actual custom file input now. Never put its contents in
             // the Spring Environment, a command argument, or an environment variable.
