@@ -69,6 +69,8 @@ jobs:
           context: .
           file: ./Dockerfile
           target: backend-check
+          build-args: |
+            QB_SOURCE_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
           platforms: linux/amd64
           no-cache-filters: backend-check
           outputs: type=cacheonly
