@@ -21,7 +21,7 @@ RUN REPODEST=/packages abuild -d && \
     cd /build/dash && REPODEST=/packages abuild -d && \
     cp /packages/*/*/dash-*.apk /out/dash.apk
 
-FROM eclipse-temurin:25.0.4.1_1-jdk-alpine-3.24@sha256:3fd2d245c4e0eba615fe366a71b8bd25f5db7104f53e4026b24bf508b880bd2a AS backend-build
+FROM eclipse-temurin:27.0.1.0-jdk-alpine-3.24@sha256:a63e42ef2a577cdb0802b73bb6f8fa2c3b0ebf1b4f00f29eb22e7f4d83b234f7 AS backend-build
 RUN apk add --no-cache libstdc++ libatomic
 COPY --from=node-toolchain /usr/local/ /usr/local/
 WORKDIR /app
