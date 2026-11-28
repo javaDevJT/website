@@ -48,19 +48,28 @@ jobs:
       - name: Validate the Renovate configuration
         if: steps.scope.outputs.setup == 'true'
         run: npx --yes --package renovate@45.1.2 -- renovate-config-validator --strict
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - name: Set up authenticated remote BuildKit
         if: steps.scope.outputs.deps == 'true'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
-          node-version-file: .nvmrc
-          package-manager-cache: false
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+          cache-binary: false
+          driver: remote
+          endpoint: tcp://buildkit:1234
+          driver-opts: |
+            cacert=/run/buildkit/tls/ca.pem
+            cert=/run/buildkit/tls/client.pem
+            key=/run/buildkit/tls/client.key
+
+      - name: Test backend and build frontend in Website's test stage
         if: steps.scope.outputs.deps == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
-          distribution: temurin
-          java-version: '25'
-      - name: Test backend and build frontend
-        if: steps.scope.outputs.deps == 'true'
-        run: |
-          npm --prefix frontend ci
-          npm --prefix frontend run build
-          ./mvnw --batch-mode --no-transfer-progress -DfailIfNoTests=true verify
+          context: .
+          file: ./Dockerfile
+          target: backend-check
+          platforms: linux/amd64
+          no-cache-filters: backend-check
+          outputs: type=cacheonly
+          push: false
