@@ -49,6 +49,7 @@ runs:
         SECURITY_REPORT_DIRECTORY: ${{ inputs.report-directory }}
         SECURITY_PLATFORMS: ${{ inputs.platforms }}
         SECURITY_IMAGE: ${{ inputs.image }}
+        SECURITY_EXPECTED_REVISION: ${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha || github.sha }}
       run: |
         set -euo pipefail
         platforms=()
@@ -74,8 +75,13 @@ runs:
           echo "::error::No image platforms were configured for retained findings" >&2
           exit 2
         }
+        revision=$(git -C "$GITHUB_WORKSPACE" rev-parse --verify HEAD)
+        if [[ ! "$revision" =~ ^[0-9a-f]{40}$ || "$revision" != "$SECURITY_EXPECTED_REVISION" ]]; then
+          echo "::error::Image scan checkout does not match the expected source revision" >&2
+          exit 1
+        fi
         args+=(--output "$RUNNER_TEMP/security-high-critical.json"
-          --repository "$GITHUB_REPOSITORY" --revision "$GITHUB_SHA"
+          --repository "$GITHUB_REPOSITORY" --revision "$revision"
           --image "$SECURITY_IMAGE" --platform "$SECURITY_PLATFORMS")
         "${args[@]}"
         echo "available=true" >> "$GITHUB_OUTPUT"
